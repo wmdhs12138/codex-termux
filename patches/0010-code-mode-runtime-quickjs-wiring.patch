@@ -1,0 +1,43 @@
+diff --git a/codex-rs/code-mode-runtime/Cargo.toml b/codex-rs/code-mode-runtime/Cargo.toml
+index 5a4d9e1..b724578 100644
+--- a/codex-rs/code-mode-runtime/Cargo.toml
++++ b/codex-rs/code-mode-runtime/Cargo.toml
+@@ -16,14 +16,14 @@ workspace = true
+ base64 = { workspace = true }
+ codex-code-mode-protocol = { workspace = true }
+ codex-protocol = { workspace = true }
+-deno_core_icudata = { workspace = true }
+ futures = { workspace = true }
+ opentelemetry = { workspace = true }
+ serde_json = { workspace = true }
+ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+ tokio-util = { workspace = true, features = ["rt"] }
+ tracing = { workspace = true }
+-v8 = { workspace = true, features = ["v8_enable_sandbox"] }
++# QuickJS-ng instead of V8: rusty_v8 has no Android build.
++rquickjs = { version = "=0.14.0", default-features = false, features = ["std", "bindgen", "loader"] }
+ 
+ [dev-dependencies]
+ pretty_assertions = { workspace = true }
+diff --git a/codex-rs/code-mode-runtime/src/cell_actor/mod.rs b/codex-rs/code-mode-runtime/src/cell_actor/mod.rs
+index 4480e13..6e29892 100644
+--- a/codex-rs/code-mode-runtime/src/cell_actor/mod.rs
++++ b/codex-rs/code-mode-runtime/src/cell_actor/mod.rs
+@@ -97,7 +97,7 @@ impl CellActor {
+ struct CellContext {
+     runtime_tx: std::sync::mpsc::Sender<RuntimeCommand>,
+     runtime_control_tx: std::sync::mpsc::Sender<RuntimeControlCommand>,
+-    runtime_terminate_handle: v8::IsolateHandle,
++    runtime_terminate_handle: crate::runtime::TerminateHandle,
+     cell_state: Arc<CellState>,
+ }
+ 
+@@ -618,7 +618,7 @@ fn resume_for_observation(
+ fn begin_termination(
+     runtime_tx: &std::sync::mpsc::Sender<RuntimeCommand>,
+     runtime_control_tx: &std::sync::mpsc::Sender<RuntimeControlCommand>,
+-    runtime_terminate_handle: &v8::IsolateHandle,
++    runtime_terminate_handle: &crate::runtime::TerminateHandle,
+     cancellation_token: &CancellationToken,
+ ) {
+     cancellation_token.cancel();

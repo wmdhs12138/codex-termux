@@ -53,6 +53,23 @@ VERSION="$VERSION" scripts/build.sh
 ACTUAL="$(python3 -c 'import json; print(json.load(open("dist/build-manifest.json"))["codex"])')"
 [ "$ACTUAL" = "$VERSION" ] || { echo "bionic-build: manifest says '$ACTUAL' but '$VERSION' was requested" >&2; exit 1; }
 
+echo "::group::Conformance: upstream's code-mode runtime tests on QuickJS"
+# The V8 runtime ships ~70 behaviour tests that go through the service API. Run them against
+# the QuickJS replacement. Three are expected to differ and are skipped by name:
+#   - the two ICU tests need Intl and locale data, which QuickJS does not have;
+#   - the circular-JSON test pins V8's wording ("Converting circular structure to JSON").
+(
+  export WORK="$ROOT/work"
+  # shellcheck source=../../scripts/cargo-env.sh
+  source "$ROOT/scripts/cargo-env.sh"
+  cd "$WORK/codex/codex-rs"
+  cargo test --release -p codex-code-mode-runtime --message-format short -- \
+    --skip date_locale_string_formats_with_icu_data \
+    --skip intl_date_time_format_formats_with_icu_data \
+    --skip text_helper_surfaces_stringify_errors
+)
+echo "::endgroup::"
+
 echo "::group::Smoke tests (Bionic, real binary)"
 CODEX="$ROOT/dist/codex"
 "$CODEX" --version | tee work/version.txt
@@ -133,7 +150,7 @@ mock_stop() { kill "$MOCK_PID" 2>/dev/null || true; wait "$MOCK_PID" 2>/dev/null
 mock_exec() {             # codex exec options..., prompt last
   rm -rf "$CODEX_HOME"; mkdir -p "$CODEX_HOME"
   set +e
-  MOCK_KEY=x timeout 90 "$CODEX" exec --skip-git-repo-check \
+  MOCK_KEY=x timeout 90 "${MOCK_CODEX:-$CODEX}" exec --skip-git-repo-check \
     -c 'model_provider="mock"' -c 'model_providers.mock.name="mock"' \
     -c "model_providers.mock.base_url=\"http://127.0.0.1:$MOCK_PORT/v1\"" \
     -c 'model_providers.mock.wire_api="responses"' -c 'model_providers.mock.env_key="MOCK_KEY"' \
@@ -142,21 +159,33 @@ mock_exec() {             # codex exec options..., prompt last
   set -e
 }
 
-# 1. A code-mode-only model must still be given usable tools. Android has no V8, so
-# codex-code-mode-host is not built and, unpatched, the model only sees `exec` (the
-# JS entry point) and cannot run a single command. Tools may be declared in the
+# 1. Tools offered to a code-mode-only model. With the host next to codex (the normal
+# install) the model gets Code Mode's `exec`, like upstream, and no direct shell tool. Without
+# the host (an older release, or a damaged install) patch 0005 must fall back to direct tools
+# instead of leaving the model unable to run a single command. Tools may be declared in the
 # top-level `tools` array or, for "responses lite" models such as gpt-6.x, inside an
 # `additional_tools` input item; tests/tool_names.py reads both.
-mock_start "$ROOT/work/mock-tools"
-mock_exec --enable code_mode_only "say hi" >work/mock-exec.txt 2>&1
-mock_stop
-tail -5 work/mock-exec.txt
-TOOLS="$(python3 "$ROOT/tests/tool_names.py" "$ROOT/work/mock-tools/out/request-1.json")"
-echo "tools sent to the model: $TOOLS"
+tool_names_for() {        # prints the tool names sent to the model; MOCK_CODEX selects the binary
+  mock_start "$ROOT/work/mock-tools"
+  mock_exec --enable code_mode_only "say hi" >work/mock-exec.txt 2>&1
+  mock_stop
+  python3 "$ROOT/tests/tool_names.py" "$ROOT/work/mock-tools/out/request-1.json"
+}
+TOOLS="$(tool_names_for)"
+echo "with the code-mode host:    $TOOLS"
 printf '%s' "$TOOLS" | python3 -c '
 import json, sys
 names = json.load(sys.stdin)
-assert "exec_command" in names, "code-mode-only model was given no shell tool: %s" % names
+assert "exec" in names and "wait" in names, "Code Mode was not offered although the host is installed: %s" % names
+assert "exec_command" not in names, "a code-mode-only model got a direct shell tool next to exec: %s" % names
+'
+NOHOST="$ROOT/work/nohost"; rm -rf "$NOHOST"; mkdir -p "$NOHOST"; cp "$CODEX" "$NOHOST/codex"
+TOOLS="$(MOCK_CODEX="$NOHOST/codex" tool_names_for)"
+echo "without the code-mode host: $TOOLS"
+printf '%s' "$TOOLS" | python3 -c '
+import json, sys
+names = json.load(sys.stdin)
+assert "exec_command" in names, "code-mode-only model was given no shell tool without the host: %s" % names
 '
 
 # 2. apply_patch must work inside the workspace. There is no platform sandbox on
@@ -228,18 +257,34 @@ cat work/update.txt
 grep -q 'wmdhs12138/codex-termux/main/install.sh' work/update.txt
 grep -q 'Update ran successfully' work/update.txt
 
+# 5. Code Mode end to end. The QuickJS host runs real scripts: the fake model makes five `exec`
+# calls (text, a nested tool call, store/load across calls, exit(), timers, a runtime error)
+# and the checker looks at exactly what the model is sent back for each.
+E2E_CM="$ROOT/work/e2e-code-mode"; rm -rf "$E2E_CM"; mkdir -p "$E2E_CM/cwd"
+python3 "$ROOT/tests/code_mode_script.py" > "$E2E_CM/script.json"
+mock_start "$ROOT/work/mock-code-mode" "$E2E_CM/script.json"
+mock_exec -C "$E2E_CM/cwd" -c 'sandbox_mode="workspace-write"' -c 'approval_policy="never"' \
+  --enable code_mode_only "run the scripts" >work/code-mode-exec.txt 2>&1
+mock_stop
+tail -4 work/code-mode-exec.txt
+LAST="$(ls "$ROOT/work/mock-code-mode/out" | sort -V | tail -1)"
+python3 "$ROOT/tests/check_code_mode.py" "$ROOT/work/mock-code-mode/out/$LAST"
+
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true
 sed -n '/Connectivity/,/Background Server/p' work/doctor.txt | head -30
 
 # Dynamic dependencies must stay within what a stock Termux provides.
-readelf -d "$CODEX" | grep NEEDED | sed 's/.*\[\(.*\)\]/\1/' | sort > work/needed.txt
-cat work/needed.txt
+for binary in "$CODEX" "$ROOT/dist/codex-code-mode-host"; do
+  echo "$(basename "$binary"):"
+  readelf -d "$binary" | grep NEEDED | sed 's/.*\[\(.*\)\]/\1/' | sort > work/needed.txt
+  sed 's/^/  /' work/needed.txt
 if grep -v -x -E 'libc\.so|libm\.so|libdl\.so|liblog\.so|libssl\.so\.[0-9.]+|libcrypto\.so\.[0-9.]+|liblzma\.so\.[0-9.]+' work/needed.txt; then
-  echo "smoke: unexpected shared library dependency (listed above)" >&2
+  echo "smoke: unexpected shared library dependency in $(basename "$binary") (listed above)" >&2
   exit 1
 fi
+done
 echo "::endgroup::"
 
 python3 - <<'PY'

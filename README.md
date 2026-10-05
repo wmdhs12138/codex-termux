@@ -57,13 +57,23 @@ codex update
 | `0007-web-search-defaults-to-live-on-android.patch` | 上游默认使用缓存搜索，行情、天气、体育等实时查询拿不到数据，只有开启 full access 时才会自动升级为实时。Android 上没有沙箱需要保护，默认改为实时；显式写 `web_search = "cached"` 仍然有效。实时搜索会读取实时网页，网页内容可能夹带提示词注入，介意的话改回 `cached`。 |
 | `0008-fs-ops-skip-sandbox-helper-on-android.patch` | 权限配置为 `workspace-write` 时，`apply_patch` 的文件读写要经过一个沙箱化的文件系统助手进程；Android 没有平台沙箱，这条路径只会报 "filesystem sandbox cannot be enforced on this executor"，表现为 `Failed to write file`。补丁让 Android 上直接读写，目标路径是否在可写范围内由 0006 的检查在更早一步把关。 |
 | `0009-update-from-codex-termux-releases.patch` | `codex update` 对这种安装方式直接报 "Could not detect the Codex installation method"，而上游的独立安装命令会下载官方 musl 版本。补丁让更新动作改为运行本项目的 `install.sh`，启动时的版本检查、`codex doctor` 和发布说明链接也都指向本项目的 Release（tag 为 `vX.Y.Z` 或 `vX.Y.Z-rN`）。 |
+| `0010-code-mode-runtime-quickjs-wiring.patch` | 接线：把 `code-mode-runtime` 的依赖从 V8 换成 QuickJS（rquickjs），并把终止句柄的类型换成自己的 `TerminateHandle`。运行时本体见下面的 overlay。 |
 
 补丁采用精确匹配：上游结构变化导致补丁不再适用时，构建会直接失败，而不是产出未验证的文件。
+
+
+### Code Mode 的 JS 引擎：overlay
+
+Code Mode 让模型写一段 JavaScript 来编排工具调用，上游用 V8 执行，而 V8 没有 Android 构建。[`overlay/`](overlay) 用 [QuickJS-ng](https://github.com/quickjs-ng/quickjs)（通过 [rquickjs](https://github.com/DelSkayn/rquickjs)）重写了 `code-mode-runtime` 里直接依赖 V8 的那一层（`runtime/` 目录，约 1000 行），上游其余部分（调度、会话、gRPC 宿主）原样复用，构建时拷贝覆盖，并同时构建 `codex-code-mode-host`，与 `codex` 并排安装。
+
+- **行为对齐**：模型看到的 JS 环境保持不变：13 个全局函数、没有 `import`、没有 `console`，报错文本也是 `ReferenceError: x is not defined\n    at …` 的形式。
+- **验收**：上游自带的约 70 个运行时行为测试在 CI 里对 QuickJS 版本运行（跳过 3 个已知差异），另有端到端测试：由假模型发出 5 次 `exec` 调用，检查文本输出、嵌套工具调用、`store`/`load`、`exit()`、定时器和运行时错误。
+- **漂移检测**：`overlay/UPSTREAM.sha256` 记录了被替换的上游文件的哈希，上游一旦改动这些文件，构建会失败并要求重新审阅，而不是悄悄忽略上游的改动。
 
 ## 已知限制
 
 - **没有沙箱隔离。** Android 没有可用的内核沙箱机制，`codex sandbox` 不可用。`workspace-write`、`network_access = false` 等沙箱设置对 shell 命令**不会被强制执行**，命令以当前 Termux 用户的权限运行；只有 `apply_patch` 会在进程内检查目标路径是否在可写范围内。审批提示属于应用层逻辑，未做改动，请据此评估风险，需要把关时使用 `approval_policy = "untrusted"`。
-- **Code Mode 不可用。** 它依赖 V8，而 rusty_v8 没有 Android 预编译包，因此不构建 `codex-code-mode-host`。会话开头会有一条警告，随后回退到直连工具（补丁 0005）。但 `code_mode_only` 的模型是针对 Code Mode 调优的，在直连工具下的表现我没有评估过；`gpt-5.5` 这类原本就是直连工具的模型不受影响。
+- **Code Mode 用 QuickJS 而不是 V8。** 脚本能正常运行，但没有 `Intl`、`Temporal` 和 ICU 区域数据（例如 `Intl.DateTimeFormat` 未定义，`toLocaleString` 不按区域格式化）；报错文本里 QuickJS 的措辞与 V8 不同；纯 CPU 密集的脚本会更慢。典型的"编排几次工具调用"不受影响。如果宿主程序 `codex-code-mode-host` 缺失（例如装的是不含它的旧版本），补丁 0005 会让模型回退到直连工具。
 - **共享后台服务不可用。** `codex app-server daemon`、`codex agents` 要求官方的完整 package 目录结构，暂不支持；交互界面默认以嵌入式运行。
 - **剪贴板图片粘贴不可用。** 这是上游在 Android 上的既有行为。
 - **凭据存放在 `$CODEX_HOME/auth.json`**（默认 `file` 模式），Android 上没有系统钥匙串。
@@ -76,8 +86,9 @@ codex update
 ubuntu-24.04-arm GitHub runner
 └── pinned termux/termux-docker image
     ├── pkg install rust clang cmake protobuf openssl ...
-    ├── git clone openai/codex@rust-v<version>, apply patches/
-    ├── cargo build --release -p codex-cli --bin codex
+    ├── git clone openai/codex@rust-v<version>, apply patches/ and overlay/
+    ├── cargo build --release: codex 和 codex-code-mode-host
+    ├── cargo test：上游的 code-mode 运行时测试对 QuickJS 运行
     ├── 在 Bionic 中真实执行：版本、登录往返、codex exec 启动路径、TUI 启动、
     │   模型实际拿到的工具列表、apply_patch 真的写出文件、codex update 执行的命令
     │   （均用本地假 API / 假 bash 驱动）、依赖白名单

@@ -1,18 +1,19 @@
 diff --git a/codex-rs/cli/src/doctor/updates.rs b/codex-rs/cli/src/doctor/updates.rs
-index fbad7d9..aeb862e 100644
+index fbad7d9..c708f08 100644
 --- a/codex-rs/cli/src/doctor/updates.rs
 +++ b/codex-rs/cli/src/doctor/updates.rs
-@@ -33,6 +33,9 @@ use super::network;
+@@ -33,6 +33,10 @@ use super::network;
  const MAX_VERSION_RESPONSE_BYTES: usize = 1024 * 1024;
  
  const VERSION_FILE_NAME: &str = "version.json";
++// See tui/src/updates.rs: the release manifest has no API rate limit.
 +#[cfg(target_os = "android")]
-+const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/wmdhs12138/codex-termux/releases/latest";
++const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/wmdhs12138/codex-termux/releases/latest/download/build-manifest.json";
 +#[cfg(not(target_os = "android"))]
  const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
  const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
  #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-@@ -395,6 +398,7 @@ fn update_action_label(context: &InstallContext) -> &'static str {
+@@ -395,6 +399,7 @@ fn update_action_label(context: &InstallContext) -> &'static str {
          InstallMethod::Pnpm => "pnpm add -g @openai/codex",
          InstallMethod::Brew => "brew upgrade --cask codex",
          InstallMethod::Standalone { .. } => "standalone installer",
@@ -20,7 +21,12 @@ index fbad7d9..aeb862e 100644
          InstallMethod::Other => "manual or unknown",
      }
  }
-@@ -423,10 +427,19 @@ async fn fetch_latest_github_release_version(
+@@ -419,14 +424,30 @@ async fn fetch_latest_github_release_version(
+ ) -> Result<String, String> {
+     #[derive(Deserialize)]
+     struct ReleaseInfo {
++        #[cfg_attr(target_os = "android", serde(rename = "codex"))]
+         tag_name: String,
      }
  
      let info = http_get_json::<ReleaseInfo>(client, GITHUB_LATEST_RELEASE_URL).await?;
@@ -30,14 +36,20 @@ index fbad7d9..aeb862e 100644
 -        .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
 +    // codex-termux tags: `vX.Y.Z`, or `vX.Y.Z-rN` for a re-cut of the same upstream version.
 +    #[cfg(target_os = "android")]
-+    let version = info.tag_name.strip_prefix('v').map(|tag| match tag.rsplit_once("-r") {
-+        Some((base, revision))
-+            if !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()) =>
-+        {
-+            base.to_string()
-+        }
-+        _ => tag.to_string(),
-+    });
++    let version = {
++        // The bare version from build-manifest.json, or `vX.Y.Z[-rN]`.
++        let tag = info.tag_name.strip_prefix('v').unwrap_or(&info.tag_name);
++        let base = match tag.rsplit_once("-r") {
++            Some((base, revision))
++                if !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()) =>
++            {
++                base
++            }
++            _ => tag,
++        };
++        (base.split('.').count() == 3 && base.split('.').all(|part| part.parse::<u64>().is_ok()))
++            .then(|| base.to_string())
++    };
 +    #[cfg(not(target_os = "android"))]
 +    let version = info.tag_name.strip_prefix("rust-v").map(str::to_string);
 +    version.ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
@@ -150,10 +162,10 @@ index 30e948d..3cbef82 100644
  #[cfg(not(debug_assertions))]
  pub(crate) enum UpdatePromptOutcome {
 diff --git a/codex-rs/tui/src/update_versions.rs b/codex-rs/tui/src/update_versions.rs
-index b0aa3de..e7f10ff 100644
+index b0aa3de..f788a82 100644
 --- a/codex-rs/tui/src/update_versions.rs
 +++ b/codex-rs/tui/src/update_versions.rs
-@@ -8,10 +8,29 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> Option<bool> {
+@@ -8,10 +8,33 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> Option<bool> {
  
  #[cfg(any(not(debug_assertions), test))]
  pub(crate) fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<String> {
@@ -165,17 +177,21 @@ index b0aa3de..e7f10ff 100644
 +    // upstream version; the revision is not part of the version Codex reports.
 +    #[cfg(target_os = "android")]
 +    {
-+        latest_tag_name
-+            .strip_prefix('v')
-+            .map(|tag| match tag.rsplit_once("-r") {
-+                Some((base, revision))
-+                    if !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()) =>
-+                {
-+                    base.to_owned()
-+                }
-+                _ => tag.to_owned(),
-+            })
-+            .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
++        // Accepts the bare version from build-manifest.json as well as `vX.Y.Z[-rN]`.
++        let tag = latest_tag_name.strip_prefix('v').unwrap_or(latest_tag_name);
++        let version = match tag.rsplit_once("-r") {
++            Some((base, revision))
++                if !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()) =>
++            {
++                base
++            }
++            _ => tag,
++        };
++        if version.split('.').count() == 3 && version.split('.').all(|part| part.parse::<u64>().is_ok()) {
++            Ok(version.to_owned())
++        } else {
++            Err(anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
++        }
 +    }
 +    #[cfg(not(target_os = "android"))]
 +    {
@@ -188,16 +204,24 @@ index b0aa3de..e7f10ff 100644
  
  #[cfg(any(not(debug_assertions), test))]
 diff --git a/codex-rs/tui/src/updates.rs b/codex-rs/tui/src/updates.rs
-index 9bbdf31..4667526 100644
+index 9bbdf31..e9d85dd 100644
 --- a/codex-rs/tui/src/updates.rs
 +++ b/codex-rs/tui/src/updates.rs
-@@ -59,6 +59,9 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
+@@ -59,10 +59,17 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
  
  // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
  const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
++// codex-termux reads the latest release's build-manifest.json instead of the GitHub API: the
++// anonymous API allows 60 calls per hour per IP, which phones behind carrier NAT exhaust, and
++// the release asset redirect has no such quota. Its `codex` field is the upstream version.
 +#[cfg(target_os = "android")]
-+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/wmdhs12138/codex-termux/releases/latest";
++const LATEST_RELEASE_URL: &str = "https://github.com/wmdhs12138/codex-termux/releases/latest/download/build-manifest.json";
 +#[cfg(not(target_os = "android"))]
  const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
  
  #[derive(Deserialize, Debug, Clone)]
+ struct ReleaseInfo {
++    #[cfg_attr(target_os = "android", serde(rename = "codex"))]
+     tag_name: String,
+ }
+ 

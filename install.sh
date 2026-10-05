@@ -32,23 +32,31 @@ else
   BASE="https://github.com/$REPO/releases/download/v$V"
 fi
 
-# The binary links the Termux OpenSSL and liblzma runtimes.
-if [ "${CODEX_TERMUX_SKIP_DEPS:-0}" != "1" ] && command -v pkg >/dev/null 2>&1; then
-  pkg install -y openssl liblzma >/dev/null
-fi
-
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-# `codex update` re-runs this script. Skip the download when the installed binary is the
-# one in the release; compare hashes, not versions, so a re-cut (vX.Y.Z-rN) is picked up.
+
+json_field() {   # json_field <file> <key>: a 64-hex string value from the build manifest
+  sed -n "s/.*\"$2\": *\"\\([0-9a-f]\\{64\\}\\)\".*/\\1/p" "$1" | head -1
+}
+hash_of() { [ -f "$1" ] && sha256sum "$1" | cut -d' ' -f1 || true; }
+
+# `codex update` re-runs this script. Skip everything when what is installed is what the
+# release ships; compare hashes, not versions, so a re-cut (vX.Y.Z-rN) is picked up. Done
+# before touching packages so an up-to-date run stays quiet.
 if [ "${CODEX_TERMUX_FORCE:-0}" != "1" ] && [ -x "$DEST/codex" ] \
    && curl -fsSL "$BASE/build-manifest.json" -o "$TMP/build-manifest.json" 2>/dev/null; then
-  want="$(sed -n 's/.*"binary_sha256": *"\([0-9a-f]\{64\}\)".*/\1/p' "$TMP/build-manifest.json" | head -1)"
-  have="$(sha256sum "$DEST/codex" | cut -d' ' -f1)"
-  if [ -n "$want" ] && [ "$want" = "$have" ]; then
+  want="$(json_field "$TMP/build-manifest.json" binary_sha256)"
+  want_host="$(json_field "$TMP/build-manifest.json" host_sha256)"
+  if [ -n "$want" ] && [ "$want" = "$(hash_of "$DEST/codex")" ] \
+     && { [ -z "$want_host" ] || [ "$want_host" = "$(hash_of "$DEST/codex-code-mode-host")" ]; }; then
     echo "install: already up to date ($("$DEST/codex" --version))"
     exit 0
   fi
+fi
+
+# The binaries link the Termux OpenSSL and liblzma runtimes.
+if [ "${CODEX_TERMUX_SKIP_DEPS:-0}" != "1" ] && command -v pkg >/dev/null 2>&1; then
+  pkg install -y openssl liblzma >/dev/null
 fi
 
 echo "install: downloading $ASSET ($VERSION)"
@@ -56,11 +64,24 @@ curl -fsSL "$BASE/$ASSET" -o "$TMP/$ASSET"
 curl -fsSL "$BASE/$ASSET.sha256" -o "$TMP/$ASSET.sha256"
 (cd "$TMP" && sha256sum -c "$ASSET.sha256")
 
-tar -xzf "$TMP/$ASSET" -C "$TMP" codex
 mkdir -p "$DEST"
 # Same-directory rename is atomic, so a running codex is never half-replaced.
-install -m755 "$TMP/codex" "$DEST/.codex.new.$$"
-mv -f "$DEST/.codex.new.$$" "$DEST/codex"
+install_one() {   # install_one <name>
+  install -m755 "$TMP/$1" "$DEST/.$1.new.$$"
+  mv -f "$DEST/.$1.new.$$" "$DEST/$1"
+}
+
+tar -xzf "$TMP/$ASSET" -C "$TMP" codex
+# The code-mode host is the JavaScript engine behind `exec`; codex finds it next to itself.
+# Older releases have none, and a leftover host from a newer release must not be paired
+# with an older codex.
+if tar -tzf "$TMP/$ASSET" | grep -qx 'codex-code-mode-host'; then
+  tar -xzf "$TMP/$ASSET" -C "$TMP" codex-code-mode-host
+  install_one codex-code-mode-host
+else
+  rm -f "$DEST/codex-code-mode-host"
+fi
+install_one codex
 
 echo "install: installed $DEST/codex"
 "$DEST/codex" --version
