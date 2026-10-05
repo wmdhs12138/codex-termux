@@ -35,8 +35,11 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-json_field() {   # json_field <file> <key>: a 64-hex string value from the build manifest
-  sed -n "s/.*\"$2\": *\"\\([0-9a-f]\\{64\\}\\)\".*/\\1/p" "$1" | head -1
+# A 64-hex string value from the build manifest. Pipelines here must not end in a reader that
+# quits early (grep -q, head): under `set -o pipefail` the writer then dies of SIGPIPE and the
+# whole pipeline reads as failed. The second grep consumes all of its input.
+json_field() {   # json_field <file> <key>
+  grep -m1 -o "\"$2\": *\"[0-9a-f]\{64\}\"" "$1" | grep -o '[0-9a-f]\{64\}' || true
 }
 hash_of() { [ -f "$1" ] && sha256sum "$1" | cut -d' ' -f1 || true; }
 
@@ -75,7 +78,12 @@ tar -xzf "$TMP/$ASSET" -C "$TMP" codex
 # The code-mode host is the JavaScript engine behind `exec`; codex finds it next to itself.
 # Older releases have none, and a leftover host from a newer release must not be paired
 # with an older codex.
-if tar -tzf "$TMP/$ASSET" | grep -qx 'codex-code-mode-host'; then
+members="$(tar -tzf "$TMP/$ASSET")"   # captured first: `tar -t | grep -q` dies of SIGPIPE
+case $'\n'"$members"$'\n' in
+  *$'\ncodex-code-mode-host\n'*) has_host=1 ;;
+  *) has_host=0 ;;
+esac
+if [ "$has_host" = 1 ]; then
   tar -xzf "$TMP/$ASSET" -C "$TMP" codex-code-mode-host
   install_one codex-code-mode-host
 else

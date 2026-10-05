@@ -28,7 +28,8 @@ done
 source "$ROOT/scripts/cargo-env.sh"
 
 RUSTC_VER="$(rustc --version | awk '{print $2}')"
-if [ "$(printf '%s\n%s\n' "$RUST_MIN" "$RUSTC_VER" | sort -V | head -1)" != "$RUST_MIN" ]; then
+SORTED_RUST="$(printf '%s\n%s\n' "$RUST_MIN" "$RUSTC_VER" | sort -V)"
+if [ "${SORTED_RUST%%$'\n'*}" != "$RUST_MIN" ]; then
   echo "build: rustc $RUSTC_VER < $RUST_MIN (std File::lock is unsupported on Android before 1.98)" >&2
   exit 1
 fi

@@ -73,10 +73,11 @@ jobs:
 
           # An immutable release reserves its tag name forever, so a re-cut
           # (or a yanked release) becomes v$V-rN.
-          if git tag -l | grep -qE "^v$V(-r[0-9]+)?$"; then
+          TAGS="$(git tag -l)"
+          if grep -qE "^v$V(-r[0-9]+)?$" <<<"$TAGS"; then
             if [ "$RECUT" = true ]; then
               N=1
-              while git tag -l | grep -qx "v$V-r$N"; do N=$((N+1)); done
+              while grep -qx "v$V-r$N" <<<"$TAGS"; do N=$((N+1)); done
               echo "tag=v$V-r$N" >> "$GITHUB_OUTPUT"
               echo "unreleased=true" >> "$GITHUB_OUTPUT"
               echo "re-cutting v$V as v$V-r$N"
@@ -97,6 +98,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Installer scenarios (offline)
+        run: bash tests/test_install.sh
+
       - name: Shell syntax and patch hygiene
         run: |
           set -euo pipefail

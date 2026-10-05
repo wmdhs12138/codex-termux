@@ -25,7 +25,8 @@ RUST_MIN="$(sed -n 's/.*"rust_min": *"\([^"]*\)".*/\1/p' versions.json)"
 [ -n "$RUST_MIN" ] || { echo "bionic-build: rust_min missing from versions.json" >&2; exit 1; }
 RUST_CAND="$(apt-cache policy rust | awk '/Candidate:/{print $2}')"
 echo "rust candidate: $RUST_CAND (need >= $RUST_MIN)"
-if [ "$(printf '%s\n%s\n' "$RUST_MIN" "${RUST_CAND%%-*}" | sort -V | head -1)" != "$RUST_MIN" ]; then
+SORTED_RUST="$(printf '%s\n%s\n' "$RUST_MIN" "${RUST_CAND%%-*}" | sort -V)"
+if [ "${SORTED_RUST%%$'\n'*}" != "$RUST_MIN" ]; then
   echo "bionic-build: repository only offers rust $RUST_CAND, need >= $RUST_MIN" >&2
   exit 1
 fi
@@ -285,7 +286,7 @@ python3 "$ROOT/tests/check_code_mode_wait.py" "$ROOT/work/mock-code-mode-wait/ou
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true
-sed -n '/Connectivity/,/Background Server/p' work/doctor.txt | head -30
+sed -n '/Connectivity/,/Background Server/p' work/doctor.txt | head -30 || true   # informational only
 
 # Dynamic dependencies must stay within what a stock Termux provides.
 for binary in "$CODEX" "$ROOT/dist/codex-code-mode-host"; do
