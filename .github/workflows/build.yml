@@ -153,6 +153,18 @@ jobs:
           print(json.dumps(doc, indent=2))
           PY
 
+      - name: Upload build output for debugging (even on failure)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-termux-debug
+          path: |
+            dist/codex-termux-aarch64.tar.gz
+            dist/build-manifest.json
+            work/*.txt
+          retention-days: 3
+          if-no-files-found: ignore
+
       - name: Upload build output
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

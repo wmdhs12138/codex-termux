@@ -1,6 +1,8 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Runs inside termux-docker (see .github/workflows/build.yml).
-set -euo pipefail
+set -Eeuo pipefail
+# Say which command failed: a bare `set -e` exit leaves no trace in the CI log.
+trap 'echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
