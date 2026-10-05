@@ -5,6 +5,10 @@ Together they cover what scripts rely on: text output, a nested tool call, store
 calls, early exit(), timers, and the text of a runtime error.
 """
 import json
+import sys
+
+# A path outside the working directory, for the nested apply_patch that must be refused.
+OUTSIDE = sys.argv[1] if len(sys.argv) > 1 else "/data/outside-guard.txt"
 
 CALLS = [
     'text("hello " + (1 + 2));\n'
@@ -29,6 +33,11 @@ CALLS = [
     '  const r = results[i];\n'
     '  text(r.status === "fulfilled" ? r.value : {name: jobs[i].name, error: String(r.reason)});\n'
     '}\n',
+    # Files are written from inside Code Mode too (a real session did this for six files):
+    # a patch inside the working directory goes through...
+    'text(await tools.apply_patch("*** Begin Patch\\n*** Add File: nested.txt\\n+nested ok\\n*** End Patch\\n"));\n',
+    # ...and one aimed outside it must still be refused, nested or not.
+    'text(await tools.apply_patch("*** Begin Patch\\n*** Add File: ' + OUTSIDE + '\\n+must not be written\\n*** End Patch\\n"));\n',
 ]
 
 print(json.dumps([

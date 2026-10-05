@@ -262,7 +262,8 @@ grep -q 'Update ran successfully' work/update.txt
 # calls (text, a nested tool call, store/load across calls, exit(), timers, a runtime error)
 # and the checker looks at exactly what the model is sent back for each.
 E2E_CM="$ROOT/work/e2e-code-mode"; rm -rf "$E2E_CM"; mkdir -p "$E2E_CM/cwd"
-python3 "$ROOT/tests/code_mode_script.py" > "$E2E_CM/script.json"
+OUTSIDE_NESTED="$ROOT/work/outside-nested.txt"; rm -f "$OUTSIDE_NESTED"
+python3 "$ROOT/tests/code_mode_script.py" "$OUTSIDE_NESTED" > "$E2E_CM/script.json"
 mock_start "$ROOT/work/mock-code-mode" "$E2E_CM/script.json"
 mock_exec -C "$E2E_CM/cwd" -c 'sandbox_mode="workspace-write"' -c 'approval_policy="never"' \
   --enable code_mode_only "run the scripts" >work/code-mode-exec.txt 2>&1
@@ -270,6 +271,9 @@ mock_stop
 tail -4 work/code-mode-exec.txt
 LAST="$(ls "$ROOT/work/mock-code-mode/out" | sort -V | tail -1)"
 python3 "$ROOT/tests/check_code_mode.py" "$ROOT/work/mock-code-mode/out/$LAST"
+# ...and on disk: the patch inside the workspace wrote its file, the one outside did not.
+[ "$(cat "$E2E_CM/cwd/nested.txt")" = "nested ok" ]
+[ ! -e "$OUTSIDE_NESTED" ]
 
 # 5b. A script that outlives its yield time: `exec` hands back what it has so far with a cell id,
 # and `wait` collects the rest. This is the path that crosses the host process and the session

@@ -16,8 +16,8 @@ for item in request["input"]:
 for number, texts in enumerate(outputs, 1):
     print(f"exec #{number}: {texts!r}"[:240])
 
-assert len(outputs) == 6, f"expected 6 exec results, got {len(outputs)}"
-one, two, three, four, five, six = outputs
+assert len(outputs) == 8, f"expected 8 exec results, got {len(outputs)}"
+one, two, three, four, five, six, seven, eight = outputs
 
 assert one[0].startswith("Script completed") and "hello 3" in one, one
 nested = json.loads(one[2])
@@ -33,4 +33,9 @@ assert six[0].startswith("Script completed"), six
 ok, fails = (json.loads(text) for text in six[1:3])
 assert ok["name"] == "ok" and ok["exit_code"] == 0 and ok["output"] == "parallel-one\n", ok
 assert fails["name"] == "fails" and fails["exit_code"] == 3, fails
+# apply_patch nested in Code Mode: a patch in the working directory goes through (the script
+# prints the tool's `{}`), one aimed outside it fails the script with the rejection.
+assert seven[0].startswith("Script completed") and seven[1:] == ["{}"], seven
+assert eight[0].startswith("Script failed"), eight
+assert any("patch rejected: writing outside of the project" in text for text in eight), eight
 print("code mode behaves as expected")
