@@ -111,36 +111,62 @@ if grep -q 'no complete local package' work/tui-smoke.txt; then
 fi
 grep -q '?1049h' work/tui-smoke.txt
 
-# A code-mode-only model must still be given usable tools. Android has no V8, so
-# codex-code-mode-host is not built and, unpatched, upstream sends `tools: []`:
-# the model cannot run a single command. Point exec at a local fake Responses
-# API (no network, no account) and read the tool list it actually sends.
-MOCK="$ROOT/work/mock"; rm -rf "$MOCK"; mkdir -p "$MOCK"
-python3 "$ROOT/tests/mock_responses.py" "$MOCK/out" "$MOCK/port" &
-MOCK_PID=$!
-for _ in $(seq 1 50); do [ -s "$MOCK/port" ] && break; sleep 0.2; done
-MOCK_PORT="$(cat "$MOCK/port")"
-rm -rf "$CODEX_HOME"; mkdir -p "$CODEX_HOME"
-set +e
-MOCK_KEY=x timeout 60 "$CODEX" exec --skip-git-repo-check --enable code_mode_only \
-  -c 'model_provider="mock"' -c 'model_providers.mock.name="mock"' \
-  -c "model_providers.mock.base_url=\"http://127.0.0.1:$MOCK_PORT/v1\"" \
-  -c 'model_providers.mock.wire_api="responses"' -c 'model_providers.mock.env_key="MOCK_KEY"' \
-  -c 'model_providers.mock.supports_websockets=false' \
-  "say hi" </dev/null >work/mock-exec.txt 2>&1
-set -e
-kill "$MOCK_PID" 2>/dev/null || true
-wait "$MOCK_PID" 2>/dev/null || true
+# --- Tests against a fake Responses API (no network, no account) -----------------
+# Codex is pointed at tests/mock_responses.py through a custom provider, so we can
+# read the requests it sends and script what the "model" answers.
+mock_start() {            # $1 = work dir, $2 = optional script.json
+  rm -rf "$1"; mkdir -p "$1"
+  python3 "$ROOT/tests/mock_responses.py" "$1/out" "$1/port" ${2:+"$2"} &
+  MOCK_PID=$!
+  for _ in $(seq 1 50); do [ -s "$1/port" ] && break; sleep 0.2; done
+  MOCK_PORT="$(cat "$1/port")"
+}
+mock_stop() { kill "$MOCK_PID" 2>/dev/null || true; wait "$MOCK_PID" 2>/dev/null || true; }
+mock_exec() {             # codex exec options..., prompt last
+  rm -rf "$CODEX_HOME"; mkdir -p "$CODEX_HOME"
+  set +e
+  MOCK_KEY=x timeout 90 "$CODEX" exec --skip-git-repo-check \
+    -c 'model_provider="mock"' -c 'model_providers.mock.name="mock"' \
+    -c "model_providers.mock.base_url=\"http://127.0.0.1:$MOCK_PORT/v1\"" \
+    -c 'model_providers.mock.wire_api="responses"' -c 'model_providers.mock.env_key="MOCK_KEY"' \
+    -c 'model_providers.mock.supports_websockets=false' \
+    "$@" </dev/null
+  set -e
+}
+
+# 1. A code-mode-only model must still be given usable tools. Android has no V8, so
+# codex-code-mode-host is not built and, unpatched, the model only sees `exec` (the
+# JS entry point) and cannot run a single command. Tools may be declared in the
+# top-level `tools` array or, for "responses lite" models such as gpt-6.x, inside an
+# `additional_tools` input item; tests/tool_names.py reads both.
+mock_start "$ROOT/work/mock-tools"
+mock_exec --enable code_mode_only "say hi" >work/mock-exec.txt 2>&1
+mock_stop
 tail -5 work/mock-exec.txt
-# Tools may be declared in the top-level `tools` array or, for "responses lite"
-# models such as gpt-6.x, inside an `additional_tools` input item.
-TOOLS="$(python3 "$ROOT/tests/tool_names.py" "$MOCK/out/request-1.json")"
+TOOLS="$(python3 "$ROOT/tests/tool_names.py" "$ROOT/work/mock-tools/out/request-1.json")"
 echo "tools sent to the model: $TOOLS"
 printf '%s' "$TOOLS" | python3 -c '
 import json, sys
 names = json.load(sys.stdin)
 assert "exec_command" in names, "code-mode-only model was given no shell tool: %s" % names
 '
+
+# 2. apply_patch must work inside the workspace. There is no platform sandbox on
+# Android, and upstream only auto-approves a patch when one is available, so with
+# approval "never" every patch was rejected ("writing outside of the project"),
+# even for a relative path in the working directory. Script the fake model to call
+# apply_patch and check that the file really appears.
+E2E="$ROOT/work/e2e-patch"; rm -rf "$E2E"; mkdir -p "$E2E/cwd"
+cat > "$E2E/script.json" <<'JSON'
+[[{"type":"custom_tool_call","id":"ctc_1","status":"completed","call_id":"call_patch1","name":"apply_patch","input":"*** Begin Patch\n*** Add File: patched.txt\n+hello from apply_patch\n*** End Patch\n"}]]
+JSON
+mock_start "$ROOT/work/mock-patch" "$E2E/script.json"
+mock_exec -C "$E2E/cwd" -c 'sandbox_mode="workspace-write"' -c 'approval_policy="never"' \
+  -c 'model="gpt-5.5"' "create a file" >work/patch-exec.txt 2>&1
+mock_stop
+tail -6 work/patch-exec.txt
+cat "$E2E/cwd/patched.txt"
+grep -q 'hello from apply_patch' "$E2E/cwd/patched.txt"
 
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.

@@ -5,7 +5,11 @@ Records every POST body to <outdir>/request-N.json and answers with a minimal
 completed SSE stream, so `codex exec` can be pointed at it (custom provider) and
 the tool list it sends can be inspected without network or credentials.
 
-usage: mock_responses.py <outdir> <portfile>
+Optionally takes a script: a JSON list whose Nth entry is the list of output
+items (e.g. a tool call) to answer the Nth request with; once the script runs
+out, a plain assistant message is returned.
+
+usage: mock_responses.py <outdir> <portfile> [script.json]
 """
 import http.server
 import json
@@ -13,6 +17,7 @@ import os
 import sys
 
 OUT, PORTFILE = sys.argv[1], sys.argv[2]
+SCRIPT = json.load(open(sys.argv[3])) if len(sys.argv) > 3 else []
 os.makedirs(OUT, exist_ok=True)
 COUNT = 0
 
@@ -28,19 +33,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         COUNT += 1
         with open(os.path.join(OUT, f"request-{COUNT}.json"), "wb") as f:
             f.write(body)
+        message = {
+            "type": "message",
+            "id": f"msg_{COUNT}",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+        items = SCRIPT[COUNT - 1] if COUNT <= len(SCRIPT) else [message]
         resp = {
             "id": f"resp_{COUNT}",
             "object": "response",
             "status": "completed",
-            "output": [
-                {
-                    "type": "message",
-                    "id": f"msg_{COUNT}",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
-                }
-            ],
+            "output": items,
             "usage": {
                 "input_tokens": 1,
                 "input_tokens_details": {"cached_tokens": 0},
@@ -51,9 +56,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         }
         events = [
             ("response.created", {"type": "response.created", "response": {"id": resp["id"], "status": "in_progress"}}),
-            ("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": resp["output"][0]}),
-            ("response.completed", {"type": "response.completed", "response": resp}),
         ]
+        for i, item in enumerate(items):
+            events.append(("response.output_item.done", {"type": "response.output_item.done", "output_index": i, "item": item}))
+        events.append(("response.completed", {"type": "response.completed", "response": resp}))
         payload = "".join(f"event: {e}\ndata: {json.dumps(d)}\n\n" for e, d in events).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

@@ -1,0 +1,15 @@
+diff --git a/codex-rs/core/src/safety.rs b/codex-rs/core/src/safety.rs
+index a4e9fb9..5b6297a 100644
+--- a/codex-rs/core/src/safety.rs
++++ b/codex-rs/core/src/safety.rs
+@@ -98,6 +98,10 @@ pub fn assess_patch_safety(
+             get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled).is_some()
+         }
+     };
++    // Android has no platform sandbox at all, so `sandbox_available` could never be
++    // true and every patch would be rejected (or need a prompt) even inside the
++    // workspace. The writable-path check below is then the guard that applies.
++    let sandbox_available = sandbox_available || cfg!(target_os = "android");
+ 
+     // Even though the patch appears to be constrained to writable paths, it is
+     // possible that paths in the patch are hard links to files outside the
