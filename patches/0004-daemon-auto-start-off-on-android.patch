@@ -1,0 +1,15 @@
+diff --git a/codex-rs/features/src/lib.rs b/codex-rs/features/src/lib.rs
+index 4b05bdb..1823e45 100644
+--- a/codex-rs/features/src/lib.rs
++++ b/codex-rs/features/src/lib.rs
+@@ -948,7 +948,9 @@ pub const FEATURES: &[FeatureSpec] = &[
+         id: Feature::DaemonAutoStart,
+         key: "daemon_auto_start",
+         stage: Stage::Stable,
+-        default_enabled: true,
++        // The shared daemon needs the official package layout (which bundles
++        // codex-code-mode-host); a standalone Android build runs embedded.
++        default_enabled: !cfg!(target_os = "android"),
+     },
+     FeatureSpec {
+         id: Feature::TranscriptV2,

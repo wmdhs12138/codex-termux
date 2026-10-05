@@ -43,6 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/instal
 | `0001-code-mode-protocol-honor-PROTOC.patch` | `protoc-bin-vendored` 没有 Android 版 protoc，改为优先读取 `PROTOC` 环境变量（Termux：`pkg install protobuf`）。 |
 | `0002-chatgpt-raise-recursion-limit.patch` | 上游钉的是 rustc 1.95，用 1.99 编译时 `codex-chatgpt` 的类型求解会超出默认深度，沿用上游其他 crate 的 `recursion_limit = "256"`。 |
 | `0003-keyring-store-android-unavailable.patch` | Android 上 `keyring` 没有后端，会退化成"保存成功但不落盘"的内存 mock，导致 `auto` 凭据模式丢失登录。改为明确报告不可用，让 `auto` 回落到 `auth.json`。 |
+| `0004-daemon-auto-start-off-on-android.patch` | 交互界面默认会去拉起共享的 app-server 守护进程，而它要求官方的完整 package 目录（其中带 `codex-code-mode-host`），单文件构建会直接报 `no complete local package`。Android 上默认改为嵌入式运行，仍可用 `features.daemon_auto_start` 手动打开。 |
 
 补丁采用精确匹配：上游结构变化导致补丁不再适用时，构建会直接失败，而不是产出未验证的文件。
 
@@ -50,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/instal
 
 - **没有沙箱隔离。** Android 没有可用的内核沙箱机制，`codex sandbox` 不可用，命令以当前 Termux 用户的权限运行。审批策略属于应用层逻辑，未做改动，请据此评估风险。
 - **Code Mode 不可用。** 它依赖 V8，而 rusty_v8 没有 Android 预编译包，因此不构建 `codex-code-mode-host`。每个会话开头会有一条警告，随后自动回退到直接工具，不影响正常使用。
-- **`codex app-server daemon`、`codex agents` 暂不支持。** 它们要求官方的完整 package 目录结构。
+- **共享后台服务不可用。** `codex app-server daemon`、`codex agents` 要求官方的完整 package 目录结构，暂不支持；交互界面默认以嵌入式运行。
 - **剪贴板图片粘贴不可用。** 这是上游在 Android 上的既有行为。
 - **凭据存放在 `$CODEX_HOME/auth.json`**（默认 `file` 模式），Android 上没有系统钥匙串。
 
@@ -64,7 +65,7 @@ ubuntu-24.04-arm GitHub runner
     ├── pkg install rust clang cmake protobuf openssl ...
     ├── git clone openai/codex@rust-v<version>, apply patches/
     ├── cargo build --release -p codex-cli --bin codex
-    ├── 在 Bionic 中真实执行：版本、登录往返、codex exec 启动路径、依赖白名单
+    ├── 在 Bionic 中真实执行：版本、登录往返、codex exec 启动路径、TUI 启动、依赖白名单
     └── 通过后发布 tarball + SHA-256 + build-manifest.json
 ```
 

@@ -72,6 +72,21 @@ test -e "$CODEX_HOME/thread-writer-locks/.coordination.lock"
 "$CODEX" logout >/dev/null
 test ! -e "$CODEX_HOME/auth.json"
 
+# The interactive TUI must start without the shared daemon. Upstream auto-starts
+# it, which needs the official package layout and aborts with "no complete local
+# package"; patch 0004 turns that off on Android. Run it on a pty and check the
+# first screen: it must enter the alternate screen instead of printing the error.
+rm -rf "$CODEX_HOME"; mkdir -p "$CODEX_HOME"
+set +e
+timeout -s KILL 10 script -qfec "$CODEX" work/tui-smoke.raw </dev/null >/dev/null 2>&1
+set -e
+strings -n 4 work/tui-smoke.raw > work/tui-smoke.txt
+if grep -q 'no complete local package' work/tui-smoke.txt; then
+  echo "smoke: TUI tried to use the shared daemon" >&2
+  exit 1
+fi
+grep -q '?1049h' work/tui-smoke.txt
+
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true
