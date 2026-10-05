@@ -3,10 +3,24 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT"
 VERSION="${CODEX_VERSION_INPUT:-}"
 
 echo "::group::Install Termux build dependencies"
+# The image's default mirror (repository.su) lags: it served rust 1.97.1 while the
+# official repository has 1.99.0, and std needs rustc >= 1.98 for File::lock on
+# Android. Pin the official repository instead of whatever the image picked.
+echo 'deb https://packages.termux.dev/apt/termux-main stable main' > "$PREFIX/etc/apt/sources.list"
 pkg update -y
+# sed, not python: python is not installed yet at this point.
+RUST_MIN="$(sed -n 's/.*"rust_min": *"\([^"]*\)".*/\1/p' versions.json)"
+[ -n "$RUST_MIN" ] || { echo "bionic-build: rust_min missing from versions.json" >&2; exit 1; }
+RUST_CAND="$(apt-cache policy rust | awk '/Candidate:/{print $2}')"
+echo "rust candidate: $RUST_CAND (need >= $RUST_MIN)"
+if [ "$(printf '%s\n%s\n' "$RUST_MIN" "${RUST_CAND%%-*}" | sort -V | head -1)" != "$RUST_MIN" ]; then
+  echo "bionic-build: repository only offers rust $RUST_CAND, need >= $RUST_MIN" >&2
+  exit 1
+fi
 apt_options=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 pkg upgrade -y "${apt_options[@]}"
 # The mirror occasionally serves mismatched package versions (e.g. file vs libmagic);
