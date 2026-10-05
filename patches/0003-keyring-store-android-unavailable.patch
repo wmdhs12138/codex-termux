@@ -1,0 +1,48 @@
+diff --git a/codex-rs/keyring-store/src/lib.rs b/codex-rs/keyring-store/src/lib.rs
+index 3b0a1c4..03751d6 100644
+--- a/codex-rs/keyring-store/src/lib.rs
++++ b/codex-rs/keyring-store/src/lib.rs
+@@ -1,8 +1,10 @@
++#[cfg(not(target_os = "android"))]
+ use keyring::Entry;
+ use keyring::Error as KeyringError;
+ use std::error::Error;
+ use std::fmt;
+ use std::fmt::Debug;
++#[cfg(not(target_os = "android"))]
+ use tracing::trace;
+ 
+ #[derive(Debug)]
+@@ -62,6 +64,32 @@ pub trait KeyringStore: Debug + Send + Sync {
+ #[derive(Debug, Clone, Copy)]
+ pub struct DefaultKeyringStore;
+ 
++/// Android has no keyring backend, so `keyring` falls back to an in-memory mock
++/// that reports success but never persists. That would defeat the file fallback
++/// of the "auto" credential mode, so report the store as unavailable instead.
++#[cfg(target_os = "android")]
++impl KeyringStore for DefaultKeyringStore {
++    fn load(&self, _service: &str, _account: &str) -> Result<Option<String>, CredentialStoreError> {
++        Err(android_unavailable())
++    }
++
++    fn save(&self, _service: &str, _account: &str, _value: &str) -> Result<(), CredentialStoreError> {
++        Err(android_unavailable())
++    }
++
++    fn delete(&self, _service: &str, _account: &str) -> Result<bool, CredentialStoreError> {
++        Err(android_unavailable())
++    }
++}
++
++#[cfg(target_os = "android")]
++fn android_unavailable() -> CredentialStoreError {
++    CredentialStoreError::new(KeyringError::NoStorageAccess(
++        "no keyring backend on Android".into(),
++    ))
++}
++
++#[cfg(not(target_os = "android"))]
+ impl KeyringStore for DefaultKeyringStore {
+     fn load(&self, service: &str, account: &str) -> Result<Option<String>, CredentialStoreError> {
+         trace!("keyring.load start");

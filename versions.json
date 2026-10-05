@@ -1,0 +1,7 @@
+{
+  "upstream": "openai/codex",
+  "version": "0.160.0",
+  "tag_prefix": "rust-v",
+  "rust_min": "1.98.0",
+  "notes": "rust >= 1.98 is required: std File::lock/try_lock only supports Android from 1.98"
+}

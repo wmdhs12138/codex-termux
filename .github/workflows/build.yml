@@ -1,0 +1,208 @@
+name: build
+
+# Codex is Apache-2.0, so unlike the proprietary-binary ports the release job
+# publishes the built binary itself.
+#
+#   resolve -- picks the upstream version and the release tag; decides whether
+#              anything new needs to be released.
+#   bionic  -- ARM64 runner + pinned termux-docker. Builds from source with the
+#              patches in patches/, then executes the result in Bionic.
+#   release -- the only job with write permission; publishes the tarball.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Codex version (X.Y.Z), or latest
+        required: true
+        default: latest
+        type: string
+      recut:
+        description: Re-release an already released version (patches changed)
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-termux-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      unreleased: ${{ steps.version.outputs.unreleased }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # tags tell us what is already released
+          persist-credentials: false
+
+      - name: Resolve upstream version and release tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.version || 'latest' }}
+          RECUT: ${{ github.event_name == 'workflow_dispatch' && inputs.recut || 'false' }}
+        run: |
+          set -euo pipefail
+          PREFIX="$(jq -r .tag_prefix versions.json)"
+          UPSTREAM="$(jq -r .upstream versions.json)"
+          if [ "$REQUESTED" = latest ]; then
+            # /releases/latest skips prereleases (the alpha stream).
+            V="$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)"
+            V="${V#"$PREFIX"}"
+          else
+            V="${REQUESTED#v}"
+          fi
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::bad version '$V'"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+          # An immutable release reserves its tag name forever, so a re-cut
+          # (or a yanked release) becomes v$V-rN.
+          if git tag -l | grep -qE "^v$V(-r[0-9]+)?$"; then
+            if [ "$RECUT" = true ]; then
+              N=1
+              while git tag -l | grep -qx "v$V-r$N"; do N=$((N+1)); done
+              echo "tag=v$V-r$N" >> "$GITHUB_OUTPUT"
+              echo "unreleased=true" >> "$GITHUB_OUTPUT"
+              echo "re-cutting v$V as v$V-r$N"
+            else
+              echo "tag=v$V" >> "$GITHUB_OUTPUT"
+              echo "unreleased=false" >> "$GITHUB_OUTPUT"
+              echo "v$V already has a release"
+            fi
+          else
+            echo "tag=v$V" >> "$GITHUB_OUTPUT"
+            echo "unreleased=true" >> "$GITHUB_OUTPUT"
+            echo "v$V is unreleased"
+          fi
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Shell syntax and patch hygiene
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh .github/ci/*.sh install.sh; do bash -n "$f"; done
+          jq -e . versions.json >/dev/null
+          # Patches must be plain unified diffs with a/ b/ prefixes.
+          for p in patches/*.patch; do
+            grep -q '^diff --git a/' "$p" || { echo "::error::$p is not a git diff"; exit 1; }
+          done
+
+  bionic:
+    needs: [resolve, tests]
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.event_name != 'schedule' || needs.resolve.outputs.unreleased == 'true')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    env:
+      TERMUX_DOCKER_IMAGE: termux/termux-docker@sha256:66fb9c3f11ed1a5b2096a8e335fdee198567acc09cfe3b2753a6f85f4ef91ead
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build and test inside Bionic Termux
+        env:
+          CODEX_VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker pull "$TERMUX_DOCKER_IMAGE"
+          sudo chmod -R a+rwX "$GITHUB_WORKSPACE"
+          docker run --rm --privileged \
+            -e CODEX_VERSION_INPUT="$CODEX_VERSION" \
+            -e TERMUX_DOCKER_IMAGE="$TERMUX_DOCKER_IMAGE" \
+            -v "$GITHUB_WORKSPACE:/data/data/com.termux/files/home/codex-termux" \
+            -w /data/data/com.termux/files/home/codex-termux \
+            "$TERMUX_DOCKER_IMAGE" bash .github/ci/bionic-build.sh
+
+      - name: Verify Bionic acceptance manifest
+        env:
+          EXPECTED_VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          with open("dist/build-manifest.json") as f:
+              doc = json.load(f)
+          assert doc["codex"] == os.environ["EXPECTED_VERSION"], doc
+          assert doc["ci_acceptance"]["runtime"] == "termux-docker/bionic", doc
+          assert doc["ci_acceptance"]["architecture"] == "aarch64", doc
+          assert doc["ci_acceptance"]["version_probe"] == "pass", doc
+          assert doc["ci_acceptance"]["smoke"] == "pass", doc
+          print(json.dumps(doc, indent=2))
+          PY
+
+      - name: Upload build output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-termux
+          path: |
+            dist/codex-termux-aarch64.tar.gz
+            dist/codex-termux-aarch64.tar.gz.sha256
+            dist/build-manifest.json
+            work/bionic-ci.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    needs: [resolve, bionic]
+    if: needs.resolve.outputs.unreleased == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-termux
+          path: out
+
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          cd out
+          sha256sum -c codex-termux-aarch64.tar.gz.sha256
+          cat > ../notes.md <<EOF
+          Codex $VERSION built for Termux (Android AArch64, Bionic libc, no proot).
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash
+          \`\`\`
+
+          Built from upstream \`$(jq -r .tag_prefix ../versions.json)$VERSION\` with the patches in \`patches/\`.
+          Commit \`$(jq -r .upstream_commit build-manifest.json)\`. Binary SHA-256 \`$(jq -r .binary_sha256 build-manifest.json)\`.
+          Codex is Apache-2.0; LICENSE and NOTICE are in the tarball.
+          EOF
+          gh release create "$TAG" --title "Codex $VERSION · Termux" \
+            --notes-file ../notes.md \
+            codex-termux-aarch64.tar.gz codex-termux-aarch64.tar.gz.sha256 build-manifest.json
+          echo "released $TAG"
