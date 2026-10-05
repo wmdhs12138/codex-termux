@@ -176,6 +176,23 @@ tail -6 work/patch-exec.txt
 cat "$E2E/cwd/patched.txt"
 grep -q 'hello from apply_patch' "$E2E/cwd/patched.txt"
 
+# 2b. ...and the path check must still hold. Patches 0006/0008 let in-workspace patches
+# through without a platform sandbox; a patch that targets a path outside the workspace
+# has to keep being rejected, otherwise those patches silently removed the only guard.
+OUTSIDE="$ROOT/work/outside-guard.txt"; rm -f "$OUTSIDE"
+python3 - "$OUTSIDE" > "$E2E/script-outside.json" <<'PY'
+import json, sys
+patch = "*** Begin Patch\n*** Add File: %s\n+must not be written\n*** End Patch\n" % sys.argv[1]
+print(json.dumps([[{"type": "custom_tool_call", "id": "ctc_2", "status": "completed",
+                    "call_id": "call_out", "name": "apply_patch", "input": patch}]]))
+PY
+mock_start "$ROOT/work/mock-outside" "$E2E/script-outside.json"
+mock_exec -C "$E2E/cwd" -c 'sandbox_mode="workspace-write"' -c 'approval_policy="never"' \
+  -c 'model="gpt-5.5"' "write outside the workspace" >work/outside-exec.txt 2>&1
+mock_stop
+grep -q 'patch rejected' work/outside-exec.txt
+[ ! -e "$OUTSIDE" ]
+
 # 3. Web search must default to live. Upstream defaults to cached, which cannot serve
 # real-time queries (finance, weather, sports) and only upgrades to live under full
 # access; on Android there is no sandbox to protect, so patch 0007 defaults to live.
