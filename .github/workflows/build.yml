@@ -203,20 +203,23 @@ jobs:
       - name: Publish release
         run: |
           set -euo pipefail
-          cd out
+          # The artifact holds dist/ and work/ paths, so download-artifact keeps the
+          # dist/ directory; look there.
+          W="$GITHUB_WORKSPACE"
+          cd "$W/out/dist"
           sha256sum -c codex-termux-aarch64.tar.gz.sha256
-          cat > ../notes.md <<EOF
+          cat > "$W/notes.md" <<EOF
           Codex $VERSION built for Termux (Android AArch64, Bionic libc, no proot).
 
           \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash
           \`\`\`
 
-          Built from upstream \`$(jq -r .tag_prefix ../versions.json)$VERSION\` with the patches in \`patches/\`.
+          Built from upstream \`$(jq -r .tag_prefix "$W/versions.json")$VERSION\` with the patches in \`patches/\`.
           Commit \`$(jq -r .upstream_commit build-manifest.json)\`. Binary SHA-256 \`$(jq -r .binary_sha256 build-manifest.json)\`.
           Codex is Apache-2.0; LICENSE and NOTICE are in the tarball.
           EOF
           gh release create "$TAG" --title "Codex $VERSION · Termux" \
-            --notes-file ../notes.md \
+            --notes-file "$W/notes.md" \
             codex-termux-aarch64.tar.gz codex-termux-aarch64.tar.gz.sha256 build-manifest.json
           echo "released $TAG"
