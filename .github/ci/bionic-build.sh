@@ -168,6 +168,28 @@ tail -6 work/patch-exec.txt
 cat "$E2E/cwd/patched.txt"
 grep -q 'hello from apply_patch' "$E2E/cwd/patched.txt"
 
+# 3. Web search must default to live. Upstream defaults to cached, which cannot serve
+# real-time queries (finance, weather, sports) and only upgrades to live under full
+# access; on Android there is no sandbox to protect, so patch 0007 defaults to live.
+# An explicit `web_search = "cached"` must still win.
+check_web_search() {      # $1 = expected external_web_access (True/False), rest = codex exec options
+  EXPECT="$1"; shift
+  mock_start "$ROOT/work/mock-web"
+  mock_exec -c 'model="gpt-5.5"' "$@" "hi" >work/mock-web.txt 2>&1
+  mock_stop
+  python3 - "$ROOT/work/mock-web/out/request-1.json" "$EXPECT" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+tools = [t for t in d.get("tools", []) if t.get("type") == "web_search"]
+assert tools, "no web_search tool was offered: %s" % [t.get("type") for t in d.get("tools", [])]
+got = tools[0].get("external_web_access")
+print("web_search external_web_access =", got)
+assert str(got) == sys.argv[2], "expected %s, got %s" % (sys.argv[2], got)
+PY
+}
+check_web_search True
+check_web_search False -c 'web_search="cached"'
+
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true

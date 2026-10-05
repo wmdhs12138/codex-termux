@@ -1,0 +1,22 @@
+diff --git a/codex-rs/core/src/config/mod.rs b/codex-rs/core/src/config/mod.rs
+index 60c6f65..046dedc 100644
+--- a/codex-rs/core/src/config/mod.rs
++++ b/codex-rs/core/src/config/mod.rs
+@@ -3765,8 +3765,16 @@ impl Config {
+             );
+             approvals_reviewer = constrained_approvals_reviewer.value();
+         }
++        // Android has no sandbox to protect, and cached search cannot serve real-time
++        // queries (finance, weather, sports); default to live. An explicit
++        // `web_search = "cached"` still wins.
++        let default_web_search_mode = if cfg!(target_os = "android") {
++            WebSearchMode::Live
++        } else {
++            WebSearchMode::Cached
++        };
+         let web_search_mode =
+-            resolve_web_search_mode(&cfg, &features).unwrap_or(WebSearchMode::Cached);
++            resolve_web_search_mode(&cfg, &features).unwrap_or(default_web_search_mode);
+         let web_search_config = resolve_web_search_config(&cfg);
+         let experimental_request_user_input_enabled =
+             resolve_experimental_request_user_input_enabled(&cfg);
