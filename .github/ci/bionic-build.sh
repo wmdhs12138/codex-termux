@@ -118,13 +118,15 @@ set -e
 kill "$MOCK_PID" 2>/dev/null || true
 wait "$MOCK_PID" 2>/dev/null || true
 tail -5 work/mock-exec.txt
-python3 - "$MOCK/out/request-1.json" <<'PY'
+# Tools may be declared in the top-level `tools` array or, for "responses lite"
+# models such as gpt-6.x, inside an `additional_tools` input item.
+TOOLS="$(python3 "$ROOT/tests/tool_names.py" "$MOCK/out/request-1.json")"
+echo "tools sent to the model: $TOOLS"
+printf '%s' "$TOOLS" | python3 -c '
 import json, sys
-d = json.load(open(sys.argv[1]))
-names = [t.get("name") or t.get("function", {}).get("name") for t in d.get("tools", [])]
-print("tools sent to the model:", names)
-assert "exec_command" in names, "code-mode-only model was given no shell tool"
-PY
+names = json.load(sys.stdin)
+assert "exec_command" in names, "code-mode-only model was given no shell tool: %s" % names
+'
 
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
