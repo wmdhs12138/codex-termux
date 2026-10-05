@@ -270,6 +270,18 @@ tail -4 work/code-mode-exec.txt
 LAST="$(ls "$ROOT/work/mock-code-mode/out" | sort -V | tail -1)"
 python3 "$ROOT/tests/check_code_mode.py" "$ROOT/work/mock-code-mode/out/$LAST"
 
+# 5b. A script that outlives its yield time: `exec` hands back what it has so far with a cell id,
+# and `wait` collects the rest. This is the path that crosses the host process and the session
+# state the most, and the one real long-running scripts depend on.
+E2E_WAIT="$ROOT/work/e2e-code-mode-wait"; rm -rf "$E2E_WAIT"; mkdir -p "$E2E_WAIT/cwd"
+python3 "$ROOT/tests/code_mode_wait_script.py" > "$E2E_WAIT/script.json"
+mock_start "$ROOT/work/mock-code-mode-wait" "$E2E_WAIT/script.json"
+mock_exec -C "$E2E_WAIT/cwd" -c 'sandbox_mode="workspace-write"' -c 'approval_policy="never"' \
+  --enable code_mode_only "run a long script" >work/code-mode-wait-exec.txt 2>&1
+mock_stop
+LAST="$(ls "$ROOT/work/mock-code-mode-wait/out" | sort -V | tail -1)"
+python3 "$ROOT/tests/check_code_mode_wait.py" "$ROOT/work/mock-code-mode-wait/out/$LAST"
+
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true

@@ -15,6 +15,20 @@ CALLS = [
     'text("a");\nexit();\ntext("b");\n',
     'await new Promise((resolve) => setTimeout(resolve, 20));\n'
     'text("timer ok");\nundefinedFn();\n',
+    # What a real gpt-6.1-sol session wrote: parallel nested calls, a failing command that is a
+    # normal result (exit code), async arrows, object spread and text() of an object.
+    'const jobs = [\n'
+    '  {name: "ok", args: {cmd: "echo parallel-one"}},\n'
+    '  {name: "fails", args: {cmd: "exit 3"}},\n'
+    '];\n'
+    'const results = await Promise.allSettled(jobs.map(async (job) => {\n'
+    '  const result = await tools.exec_command(job.args);\n'
+    '  return {name: job.name, ...result};\n'
+    '}));\n'
+    'for (let i = 0; i < results.length; i++) {\n'
+    '  const r = results[i];\n'
+    '  text(r.status === "fulfilled" ? r.value : {name: jobs[i].name, error: String(r.reason)});\n'
+    '}\n',
 ]
 
 print(json.dumps([
