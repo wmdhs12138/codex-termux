@@ -299,6 +299,11 @@ echo "::group::Code Mode through the shared background server"
 bash "$ROOT/tests/test_daemon_session.sh" "$CODEX"
 echo "::endgroup::"
 
+# The TUI itself: with daemon_auto_start it starts the daemon and attaches instead of embedding.
+echo "::group::TUI with the shared background server"
+bash "$ROOT/tests/test_daemon_tui.sh" "$CODEX"
+echo "::endgroup::"
+
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true
