@@ -9,9 +9,19 @@ echo "::group::Install Termux build dependencies"
 pkg update -y
 apt_options=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 pkg upgrade -y "${apt_options[@]}"
-pkg install -y "${apt_options[@]}" \
-  rust clang cmake make binutils coreutils curl file git jq openssl liblzma pkg-config \
-  protobuf python tar sed gawk util-linux
+# The mirror occasionally serves mismatched package versions (e.g. file vs libmagic);
+# retry after a fresh index instead of failing the whole build.
+for attempt in 1 2 3; do
+  if pkg install -y "${apt_options[@]}" \
+       rust clang cmake make binutils coreutils curl git jq openssl liblzma pkg-config \
+       protobuf python tar sed gawk util-linux; then
+    break
+  fi
+  [ "$attempt" = 3 ] && { echo "pkg install failed after $attempt attempts" >&2; exit 1; }
+  echo "pkg install failed (attempt $attempt); refreshing indexes and retrying"
+  sleep 20
+  pkg update -y
+done
 echo "::endgroup::"
 
 cd "$ROOT"
