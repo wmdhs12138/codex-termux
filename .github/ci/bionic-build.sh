@@ -87,6 +87,35 @@ if grep -q 'no complete local package' work/tui-smoke.txt; then
 fi
 grep -q '?1049h' work/tui-smoke.txt
 
+# A code-mode-only model must still be given usable tools. Android has no V8, so
+# codex-code-mode-host is not built and, unpatched, upstream sends `tools: []`:
+# the model cannot run a single command. Point exec at a local fake Responses
+# API (no network, no account) and read the tool list it actually sends.
+MOCK="$ROOT/work/mock"; rm -rf "$MOCK"; mkdir -p "$MOCK"
+python3 "$ROOT/tests/mock_responses.py" "$MOCK/out" "$MOCK/port" &
+MOCK_PID=$!
+for _ in $(seq 1 50); do [ -s "$MOCK/port" ] && break; sleep 0.2; done
+MOCK_PORT="$(cat "$MOCK/port")"
+rm -rf "$CODEX_HOME"; mkdir -p "$CODEX_HOME"
+set +e
+MOCK_KEY=x timeout 60 "$CODEX" exec --skip-git-repo-check --enable code_mode_only \
+  -c 'model_provider="mock"' -c 'model_providers.mock.name="mock"' \
+  -c "model_providers.mock.base_url=\"http://127.0.0.1:$MOCK_PORT/v1\"" \
+  -c 'model_providers.mock.wire_api="responses"' -c 'model_providers.mock.env_key="MOCK_KEY"' \
+  -c 'model_providers.mock.supports_websockets=false' \
+  "say hi" </dev/null >work/mock-exec.txt 2>&1
+set -e
+kill "$MOCK_PID" 2>/dev/null || true
+wait "$MOCK_PID" 2>/dev/null || true
+tail -5 work/mock-exec.txt
+python3 - "$MOCK/out/request-1.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+names = [t.get("name") or t.get("function", {}).get("name") for t in d.get("tools", [])]
+print("tools sent to the model:", names)
+assert "exec_command" in names, "code-mode-only model was given no shell tool"
+PY
+
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true
