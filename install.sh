@@ -104,8 +104,10 @@ if [ "${CODEX_TERMUX_SKIP_DAEMON_RESTART:-0}" != "1" ]; then
     case "$state" in
       *'"status":"running"'*)
         echo "install: restarting the shared background server on the new release"
-        CODEX_HOME="$home" "$DEST/codex" app-server daemon restart >/dev/null 2>&1 \
-          || echo "install: could not restart it; run: codex app-server daemon restart" >&2 ;;
+        if ! why="$(CODEX_HOME="$home" "$DEST/codex" app-server daemon restart 2>&1)"; then
+          echo "install: could not restart it; run: codex app-server daemon restart" >&2
+          printf '%s\n' "$why" | tail -3 >&2
+        fi ;;
     esac
   fi
 fi

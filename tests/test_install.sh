@@ -20,7 +20,7 @@ mk_release() {   # mk_release <dir> <with_host:0|1> <label>
 #!/bin/sh
 case "\$*" in
   "app-server daemon version") echo "{\"status\":\"\${STUB_DAEMON:-notRunning}\"}"; exit 0 ;;
-  "app-server daemon restart") echo "restart $label" >> "\${STUB_LOG:-/dev/null}"; exit 0 ;;
+  "app-server daemon restart") [ -n "\${STUB_RESTART_FAILS:-}" ] && { echo "boom: \$STUB_RESTART_FAILS" >&2; exit 1; }; echo "restart $label" >> "\${STUB_LOG:-/dev/null}"; exit 0 ;;
 esac
 echo "codex-cli 0.160.0 ($label)"
 STUB
@@ -123,5 +123,12 @@ echo "11) CODEX_TERMUX_SKIP_DAEMON_RESTART=1 opts out"
 mkdir -p "$CODEX_HOME/app-server-daemon"; : > "$CODEX_HOME/app-server-daemon/daemon.pid"
 CODEX_TERMUX_SKIP_DAEMON_RESTART=1 STUB_DAEMON=running run_install "$T/new" >/dev/null
 [ ! -s "$STUB_LOG" ] || fail "opt-out ignored"
+
+echo "12) a failed restart is reported with its reason, and does not fail the install"
+mkdir -p "$CODEX_HOME/app-server-daemon"; : > "$CODEX_HOME/app-server-daemon/daemon.pid"
+out="$(STUB_RESTART_FAILS=because STUB_DAEMON=running run_install "$T/old")" || fail "a failed restart failed the install"
+echo "$out" | grep -q 'could not restart it' || fail "no warning for the failed restart: $out"
+echo "$out" | grep -q 'boom: because' || fail "the reason was swallowed: $out"
+[ "$("$T/bin/codex")" = "codex-cli 0.160.0 (old)" ] || fail "the release was not installed"
 
 echo "install.sh: all scenarios passed"
