@@ -1,0 +1,49 @@
+diff --git a/codex-rs/app-server-transport/src/transport/unix_socket.rs b/codex-rs/app-server-transport/src/transport/unix_socket.rs
+index 3f70bcc..b87f619 100644
+--- a/codex-rs/app-server-transport/src/transport/unix_socket.rs
++++ b/codex-rs/app-server-transport/src/transport/unix_socket.rs
+@@ -292,7 +292,12 @@ fn protected_socket_path(rendezvous_path: &Path) -> IoResult<std::path::PathBuf>
+     })?;
+     let path = std::fs::canonicalize(parent)?.join(name);
+     let hash = Sha256::digest(path.as_os_str().as_bytes());
+-    Ok(codex_uds::shared_daemon_socket_directory()?.join(format!("{hash:x}")))
++    let hash = format!("{hash:x}");
++    // The Termux prefix is long: with all 64 digits the socket path is 119 bytes, past the
++    // 107 that fit `sun_path`. 128 bits of the digest still identify the rendezvous path.
++    #[cfg(target_os = "android")]
++    let hash = &hash[..32];
++    Ok(codex_uds::shared_daemon_socket_directory()?.join(hash))
+ }
+ 
+ pub struct AppServerStartupLock {
+diff --git a/codex-rs/uds/src/daemon_directory.rs b/codex-rs/uds/src/daemon_directory.rs
+index 90c3c10..efa9f9a 100644
+--- a/codex-rs/uds/src/daemon_directory.rs
++++ b/codex-rs/uds/src/daemon_directory.rs
+@@ -9,10 +9,24 @@ use std::os::unix::fs::DirBuilderExt;
+ use std::os::unix::fs::MetadataExt;
+ use std::path::PathBuf;
+ 
++/// Android has no writable `/tmp`: it is a root-level directory owned by `shell`. Use the
++/// Termux prefix' tmp, the directory `$TMPDIR` points to. It is a constant rather than read
++/// from the environment because every client has to agree on it, and it is the shortest
++/// writable location (the socket paths below must fit `sun_path`).
++#[cfg(target_os = "android")]
++fn temporary_root() -> io::Result<PathBuf> {
++    Ok(PathBuf::from("/data/data/com.termux/files/usr/tmp"))
++}
++
++#[cfg(not(target_os = "android"))]
++fn temporary_root() -> io::Result<PathBuf> {
++    // Resolve the system alias /tmp -> /private/tmp on macOS.
++    fs::canonicalize("/tmp")
++}
++
+ /// Returns the fixed executor-local directory that every sandbox must hide.
+ pub fn shared_daemon_socket_directory() -> io::Result<PathBuf> {
+-    // Resolve the system alias /tmp -> /private/tmp on macOS.
+-    let temporary_root = fs::canonicalize("/tmp")?;
++    let temporary_root = temporary_root()?;
+     let uid = unsafe { libc::geteuid() };
+     Ok(temporary_root.join(format!("codex-daemon-{uid}")))
+ }

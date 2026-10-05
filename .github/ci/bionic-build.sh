@@ -37,7 +37,7 @@ pkg upgrade -y "${apt_options[@]}"
 for attempt in 1 2 3; do
   if pkg install -y "${apt_options[@]}" \
        rust clang cmake make binutils coreutils curl git jq openssl liblzma pkg-config \
-       protobuf python tar sed gawk util-linux; then
+       protobuf python tar sed gawk util-linux procps; then
     break
   fi
   [ "$attempt" = 3 ] && { echo "pkg install failed after $attempt attempts" >&2; exit 1; }
@@ -286,6 +286,12 @@ mock_exec -C "$E2E_WAIT/cwd" -c 'sandbox_mode="workspace-write"' -c 'approval_po
 mock_stop
 LAST="$(ls "$ROOT/work/mock-code-mode-wait/out" | sort -V | tail -1)"
 python3 "$ROOT/tests/check_code_mode_wait.py" "$ROOT/work/mock-code-mode-wait/out/$LAST"
+
+# The shared background server: rendezvous socket under the Termux prefix, /proc identity,
+# start / reuse / restart / stop (patches 0011 and 0012).
+echo "::group::Shared background server lifecycle"
+bash "$ROOT/tests/test_daemon.sh" "$CODEX"
+echo "::endgroup::"
 
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.

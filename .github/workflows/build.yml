@@ -104,7 +104,7 @@ jobs:
       - name: Shell syntax and patch hygiene
         run: |
           set -euo pipefail
-          for f in scripts/*.sh .github/ci/*.sh install.sh; do bash -n "$f"; done
+          for f in scripts/*.sh .github/ci/*.sh tests/*.sh install.sh; do bash -n "$f"; done
           jq -e . versions.json >/dev/null
           # Patches must be plain unified diffs with a/ b/ prefixes.
           for p in patches/*.patch; do
