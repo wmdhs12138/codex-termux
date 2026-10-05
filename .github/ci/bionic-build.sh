@@ -1,12 +1,18 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Runs inside termux-docker (see .github/workflows/build.yml).
 set -Eeuo pipefail
-# Say which command failed: a bare `set -e` exit leaves no trace in the CI log.
-trap 'echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
+# Report the failing command (a bare `set -e` exit leaves no trace in the CI log).
+# EXIT, not ERR: ERR also fires for commands that are expected to exit non-zero.
+trap 'rc=$?; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-VERSION="${CODEX_VERSION_INPUT:-}"
+# termux-docker does not reliably hand `docker run -e` variables to the command, so the
+# workflow also writes the version into the mounted workspace; prefer the file.
+VERSION="$(cat work/codex-version 2>/dev/null || true)"
+[ -n "$VERSION" ] || VERSION="${CODEX_VERSION_INPUT:-}"
+echo "bionic-build: requested version='$VERSION' (env='${CODEX_VERSION_INPUT:-<unset>}')"
+[ -n "$VERSION" ] || { echo "bionic-build: no version was passed in" >&2; exit 1; }
 
 echo "::group::Install Termux build dependencies"
 # The image's default mirror (repository.su) lags: it served rust 1.97.1 while the
@@ -45,7 +51,7 @@ mkdir -p work
 VERSION="$VERSION" scripts/build.sh
 
 ACTUAL="$(python3 -c 'import json; print(json.load(open("dist/build-manifest.json"))["codex"])')"
-test "$ACTUAL" = "$VERSION"
+[ "$ACTUAL" = "$VERSION" ] || { echo "bionic-build: manifest says '$ACTUAL' but '$VERSION' was requested" >&2; exit 1; }
 
 echo "::group::Smoke tests (Bionic, real binary)"
 CODEX="$ROOT/dist/codex"

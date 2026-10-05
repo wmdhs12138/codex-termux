@@ -5,8 +5,9 @@
 #
 # Runs on a Termux device or inside termux-docker (CI). Output: dist/.
 set -Eeuo pipefail
-# Say which command failed: a bare `set -e` exit leaves no trace in the CI log.
-trap 'echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $?)" >&2' ERR
+# Report the failing command (a bare `set -e` exit leaves no trace in the CI log).
+# EXIT, not ERR: ERR also fires for commands that are expected to exit non-zero.
+trap 'rc=$?; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${WORK:-$ROOT/work}"

@@ -128,6 +128,8 @@ jobs:
         run: |
           set -euo pipefail
           docker pull "$TERMUX_DOCKER_IMAGE"
+          mkdir -p work
+          printf '%s' "$CODEX_VERSION" > work/codex-version
           sudo chmod -R a+rwX "$GITHUB_WORKSPACE"
           docker run --rm --privileged \
             -e CODEX_VERSION_INPUT="$CODEX_VERSION" \

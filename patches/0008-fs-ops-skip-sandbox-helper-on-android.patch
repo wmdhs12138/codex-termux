@@ -1,0 +1,37 @@
+diff --git a/codex-rs/file-system/src/lib.rs b/codex-rs/file-system/src/lib.rs
+index cacff73..1335bda 100644
+--- a/codex-rs/file-system/src/lib.rs
++++ b/codex-rs/file-system/src/lib.rs
+@@ -404,18 +404,24 @@ impl FileSystemSandboxContext {
+ 
+     /// Whether filesystem reads need a platform sandbox on the selected executor.
+     pub fn should_read_from_sandbox(&self) -> bool {
+-        !self
+-            .permissions
+-            .file_system_sandbox_policy()
+-            .has_full_disk_read_access_for_convention(self.cwd.infer_path_convention())
++        // Android has no platform sandbox, so there is no helper to run reads in and
++        // the sandboxed path can only fail ("filesystem sandbox cannot be enforced").
++        !cfg!(target_os = "android")
++            && !self
++                .permissions
++                .file_system_sandbox_policy()
++                .has_full_disk_read_access_for_convention(self.cwd.infer_path_convention())
+     }
+ 
+     /// Whether filesystem writes need a platform sandbox on the selected executor.
+     pub fn should_write_into_sandbox(&self) -> bool {
+-        !self
+-            .permissions
+-            .file_system_sandbox_policy()
+-            .has_full_disk_write_access_for_convention(self.cwd.infer_path_convention())
++        // See should_read_from_sandbox. apply_patch has already checked the target
++        // paths against the writable roots (safety.rs) before it gets here.
++        !cfg!(target_os = "android")
++            && !self
++                .permissions
++                .file_system_sandbox_policy()
++                .has_full_disk_write_access_for_convention(self.cwd.infer_path_convention())
+     }
+ 
+     /// Whether this context selects either supported Windows sandbox implementation.
