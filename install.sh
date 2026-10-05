@@ -22,7 +22,9 @@ if [ "${CODEX_TERMUX_ALLOW_UNSUPPORTED:-0}" != "1" ]; then
   fi
 fi
 
-if [ "$VERSION" = "latest" ]; then
+if [ -n "${CODEX_TERMUX_BASE_URL:-}" ]; then
+  BASE="$CODEX_TERMUX_BASE_URL"   # for tests: a directory (file://...) laid out like a release
+elif [ "$VERSION" = "latest" ]; then
   BASE="https://github.com/$REPO/releases/latest/download"
 else
   V="${VERSION#v}"
@@ -37,6 +39,18 @@ fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+# `codex update` re-runs this script. Skip the download when the installed binary is the
+# one in the release; compare hashes, not versions, so a re-cut (vX.Y.Z-rN) is picked up.
+if [ "${CODEX_TERMUX_FORCE:-0}" != "1" ] && [ -x "$DEST/codex" ] \
+   && curl -fsSL "$BASE/build-manifest.json" -o "$TMP/build-manifest.json" 2>/dev/null; then
+  want="$(sed -n 's/.*"binary_sha256": *"\([0-9a-f]\{64\}\)".*/\1/p' "$TMP/build-manifest.json" | head -1)"
+  have="$(sha256sum "$DEST/codex" | cut -d' ' -f1)"
+  if [ -n "$want" ] && [ "$want" = "$have" ]; then
+    echo "install: already up to date ($("$DEST/codex" --version))"
+    exit 0
+  fi
+fi
+
 echo "install: downloading $ASSET ($VERSION)"
 curl -fsSL "$BASE/$ASSET" -o "$TMP/$ASSET"
 curl -fsSL "$BASE/$ASSET.sha256" -o "$TMP/$ASSET.sha256"

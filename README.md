@@ -23,7 +23,15 @@ curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/instal
 curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/install.sh | VERSION=0.160.0 bash
 ```
 
-更新：重复运行安装命令即可。不要使用 `codex update`，它会下载官方的 musl 版本。
+## 更新
+
+```bash
+codex update
+```
+
+`codex update` 已被改为从本项目的 Release 更新（上游版本会去下载官方的 musl 版本）：它会运行本项目的 `install.sh`，下载最新 Release、校验 SHA-256 并原子替换。已经是最新时（按二进制哈希判断，`vX.Y.Z-rN` 重发布也能识别）会直接提示并退出；需要强制重装时用 `CODEX_TERMUX_FORCE=1 codex update`。
+
+启动时的"有新版本"提示和 `codex doctor` 的更新检查也改为查询本项目的 Release。重复运行安装命令同样可以更新。
 
 ## 解决了什么
 
@@ -48,6 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/instal
 | `0006-apply-patch-auto-approve-without-platform-sandbox.patch` | 上游只在存在平台沙箱时才自动批准"路径在可写范围内"的补丁（防止硬链接绕过）。Android 没有任何平台沙箱，审批策略为 `never` 或 `granular` 时每个补丁都会被拒绝，错误信息还写成"writing outside of the project"，连工作目录里的相对路径也不例外，`apply_patch` 因此完全不可用。补丁让 Android 上仍按可写路径检查放行。 |
 | `0007-web-search-defaults-to-live-on-android.patch` | 上游默认使用缓存搜索，行情、天气、体育等实时查询拿不到数据，只有开启 full access 时才会自动升级为实时。Android 上没有沙箱需要保护，默认改为实时；显式写 `web_search = "cached"` 仍然有效。实时搜索会读取实时网页，网页内容可能夹带提示词注入，介意的话改回 `cached`。 |
 | `0008-fs-ops-skip-sandbox-helper-on-android.patch` | 权限配置为 `workspace-write` 时，`apply_patch` 的文件读写要经过一个沙箱化的文件系统助手进程；Android 没有平台沙箱，这条路径只会报 "filesystem sandbox cannot be enforced on this executor"，表现为 `Failed to write file`。补丁让 Android 上直接读写，目标路径是否在可写范围内由 0006 的检查在更早一步把关。 |
+| `0009-update-from-codex-termux-releases.patch` | `codex update` 对这种安装方式直接报 "Could not detect the Codex installation method"，而上游的独立安装命令会下载官方 musl 版本。补丁让更新动作改为运行本项目的 `install.sh`，启动时的版本检查、`codex doctor` 和发布说明链接也都指向本项目的 Release（tag 为 `vX.Y.Z` 或 `vX.Y.Z-rN`）。 |
 
 补丁采用精确匹配：上游结构变化导致补丁不再适用时，构建会直接失败，而不是产出未验证的文件。
 
@@ -70,7 +79,8 @@ ubuntu-24.04-arm GitHub runner
     ├── git clone openai/codex@rust-v<version>, apply patches/
     ├── cargo build --release -p codex-cli --bin codex
     ├── 在 Bionic 中真实执行：版本、登录往返、codex exec 启动路径、TUI 启动、
-    │   模型实际拿到的工具列表、apply_patch 真的写出文件（均用本地假 API 脚本化驱动）、依赖白名单
+    │   模型实际拿到的工具列表、apply_patch 真的写出文件、codex update 执行的命令
+    │   （均用本地假 API / 假 bash 驱动）、依赖白名单
     └── 通过后发布 tarball + SHA-256 + build-manifest.json
 ```
 

@@ -1,0 +1,203 @@
+diff --git a/codex-rs/cli/src/doctor/updates.rs b/codex-rs/cli/src/doctor/updates.rs
+index fbad7d9..aeb862e 100644
+--- a/codex-rs/cli/src/doctor/updates.rs
++++ b/codex-rs/cli/src/doctor/updates.rs
+@@ -33,6 +33,9 @@ use super::network;
+ const MAX_VERSION_RESPONSE_BYTES: usize = 1024 * 1024;
+ 
+ const VERSION_FILE_NAME: &str = "version.json";
++#[cfg(target_os = "android")]
++const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/wmdhs12138/codex-termux/releases/latest";
++#[cfg(not(target_os = "android"))]
+ const GITHUB_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+ const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
+ #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+@@ -395,6 +398,7 @@ fn update_action_label(context: &InstallContext) -> &'static str {
+         InstallMethod::Pnpm => "pnpm add -g @openai/codex",
+         InstallMethod::Brew => "brew upgrade --cask codex",
+         InstallMethod::Standalone { .. } => "standalone installer",
++        InstallMethod::Other if cfg!(target_os = "android") => "codex-termux installer",
+         InstallMethod::Other => "manual or unknown",
+     }
+ }
+@@ -423,10 +427,19 @@ async fn fetch_latest_github_release_version(
+     }
+ 
+     let info = http_get_json::<ReleaseInfo>(client, GITHUB_LATEST_RELEASE_URL).await?;
+-    info.tag_name
+-        .strip_prefix("rust-v")
+-        .map(str::to_string)
+-        .ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
++    // codex-termux tags: `vX.Y.Z`, or `vX.Y.Z-rN` for a re-cut of the same upstream version.
++    #[cfg(target_os = "android")]
++    let version = info.tag_name.strip_prefix('v').map(|tag| match tag.rsplit_once("-r") {
++        Some((base, revision))
++            if !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()) =>
++        {
++            base.to_string()
++        }
++        _ => tag.to_string(),
++    });
++    #[cfg(not(target_os = "android"))]
++    let version = info.tag_name.strip_prefix("rust-v").map(str::to_string);
++    version.ok_or_else(|| format!("failed to parse latest tag {}", info.tag_name))
+ }
+ 
+ async fn fetch_homebrew_cask_version(client: &RouteAwareClientPool) -> Result<String, String> {
+diff --git a/codex-rs/tui/src/history_cell/notices.rs b/codex-rs/tui/src/history_cell/notices.rs
+index c5fa224..dd9f76b 100644
+--- a/codex-rs/tui/src/history_cell/notices.rs
++++ b/codex-rs/tui/src/history_cell/notices.rs
+@@ -8,6 +8,11 @@ use crate::wrapping::adaptive_wrap_line_to_width;
+ 
+ #[cfg_attr(not(test), allow(dead_code))]
+ const RECAP_HEADING: &str = "Conversation recap";
++const RELEASE_NOTES_URL: &str = if cfg!(target_os = "android") {
++    "https://github.com/wmdhs12138/codex-termux/releases/latest"
++} else {
++    "https://github.com/openai/codex/releases/latest"
++};
+ 
+ #[cfg_attr(debug_assertions, allow(dead_code))]
+ #[derive(Debug)]
+@@ -56,7 +61,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
+             update_instruction,
+             "",
+             "See full release notes:",
+-            "https://github.com/openai/codex/releases/latest"
++            RELEASE_NOTES_URL
+                 .fg(accent_color())
+                 .underlined(),
+         ];
+@@ -81,7 +86,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
+             Line::from(update_instruction),
+             Line::from(""),
+             Line::from("See full release notes:"),
+-            Line::from("https://github.com/openai/codex/releases/latest"),
++            Line::from(RELEASE_NOTES_URL),
+         ]
+     }
+ 
+diff --git a/codex-rs/tui/src/update_action.rs b/codex-rs/tui/src/update_action.rs
+index 860d0bd..adc3387 100644
+--- a/codex-rs/tui/src/update_action.rs
++++ b/codex-rs/tui/src/update_action.rs
+@@ -5,6 +5,17 @@ use codex_install_context::InstallMethod;
+ #[cfg(any(not(debug_assertions), test))]
+ use codex_install_context::StandalonePlatform;
+ 
++const STANDALONE_UNIX_ARGS: &[&str] = &[
++    "-c",
++    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
++];
++// codex-termux ships its own installer and Release assets; the official one downloads a musl
++// build that does not run properly on Android.
++const TERMUX_INSTALL_ARGS: &[&str] = &[
++    "-c",
++    "curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/install.sh | bash",
++];
++
+ /// Update action the CLI should perform after the TUI exits.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum UpdateAction {
+@@ -39,7 +50,9 @@ impl UpdateAction {
+                 StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
+                 StandalonePlatform::Windows => UpdateAction::StandaloneWindows,
+             }),
+-            InstallMethod::Other => None,
++            // codex-termux is installed by its own installer, which the install context
++            // cannot tell apart from an unknown install.
++            InstallMethod::Other => cfg!(target_os = "android").then_some(UpdateAction::StandaloneUnix),
+         }
+     }
+ 
+@@ -52,13 +65,13 @@ impl UpdateAction {
+             UpdateAction::VitePlusGlobalLatest => ("vp", &["install", "-g", "@openai/codex"]),
+             UpdateAction::PnpmGlobalLatest => ("pnpm", &["add", "-g", "@openai/codex"]),
+             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
+-            UpdateAction::StandaloneUnix => (
+-                "sh",
+-                &[
+-                    "-c",
+-                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+-                ],
+-            ),
++            UpdateAction::StandaloneUnix => {
++                if cfg!(target_os = "android") {
++                    ("bash", TERMUX_INSTALL_ARGS)
++                } else {
++                    ("sh", STANDALONE_UNIX_ARGS)
++                }
++            }
+             UpdateAction::StandaloneWindows => (
+                 "powershell",
+                 &[
+diff --git a/codex-rs/tui/src/update_prompt.rs b/codex-rs/tui/src/update_prompt.rs
+index 30e948d..3cbef82 100644
+--- a/codex-rs/tui/src/update_prompt.rs
++++ b/codex-rs/tui/src/update_prompt.rs
+@@ -39,7 +39,11 @@ use ratatui::widgets::Wrap;
+ #[cfg(not(debug_assertions))]
+ use tokio_stream::StreamExt;
+ 
+-const RELEASE_NOTES_URL: &str = "https://github.com/openai/codex/releases/latest";
++const RELEASE_NOTES_URL: &str = if cfg!(target_os = "android") {
++    "https://github.com/wmdhs12138/codex-termux/releases/latest"
++} else {
++    "https://github.com/openai/codex/releases/latest"
++};
+ 
+ #[cfg(not(debug_assertions))]
+ pub(crate) enum UpdatePromptOutcome {
+diff --git a/codex-rs/tui/src/update_versions.rs b/codex-rs/tui/src/update_versions.rs
+index b0aa3de..e7f10ff 100644
+--- a/codex-rs/tui/src/update_versions.rs
++++ b/codex-rs/tui/src/update_versions.rs
+@@ -8,10 +8,29 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> Option<bool> {
+ 
+ #[cfg(any(not(debug_assertions), test))]
+ pub(crate) fn extract_version_from_latest_tag(latest_tag_name: &str) -> anyhow::Result<String> {
+-    latest_tag_name
+-        .strip_prefix("rust-v")
+-        .map(str::to_owned)
+-        .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
++    // codex-termux tags its releases `vX.Y.Z`, or `vX.Y.Z-rN` for a re-cut of the same
++    // upstream version; the revision is not part of the version Codex reports.
++    #[cfg(target_os = "android")]
++    {
++        latest_tag_name
++            .strip_prefix('v')
++            .map(|tag| match tag.rsplit_once("-r") {
++                Some((base, revision))
++                    if !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()) =>
++                {
++                    base.to_owned()
++                }
++                _ => tag.to_owned(),
++            })
++            .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        latest_tag_name
++            .strip_prefix("rust-v")
++            .map(str::to_owned)
++            .ok_or_else(|| anyhow::anyhow!("Failed to parse latest tag name '{latest_tag_name}'"))
++    }
+ }
+ 
+ #[cfg(any(not(debug_assertions), test))]
+diff --git a/codex-rs/tui/src/updates.rs b/codex-rs/tui/src/updates.rs
+index 9bbdf31..4667526 100644
+--- a/codex-rs/tui/src/updates.rs
++++ b/codex-rs/tui/src/updates.rs
+@@ -59,6 +59,9 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
+ 
+ // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
+ const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
++#[cfg(target_os = "android")]
++const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/wmdhs12138/codex-termux/releases/latest";
++#[cfg(not(target_os = "android"))]
+ const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+ 
+ #[derive(Deserialize, Debug, Clone)]

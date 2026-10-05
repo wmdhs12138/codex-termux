@@ -198,6 +198,19 @@ PY
 check_web_search True
 check_web_search False -c 'web_search="cached"'
 
+# 4. `codex update` must run this project's installer. Upstream does not recognise this
+# install (InstallMethod::Other) and bails with "Could not detect the Codex installation
+# method"; its standalone action would also fetch the official musl build. Put a fake
+# `bash` first on PATH so the command is recorded instead of executed.
+FAKEBIN="$ROOT/work/fakebin"; rm -rf "$FAKEBIN"; mkdir -p "$FAKEBIN"
+printf '#!%s/bin/sh\necho "FAKE-BASH $*"\n' "$PREFIX" > "$FAKEBIN/bash"; chmod +x "$FAKEBIN/bash"
+set +e
+PATH="$FAKEBIN:$PATH" "$CODEX" update </dev/null >work/update.txt 2>&1
+set -e
+cat work/update.txt
+grep -q 'wmdhs12138/codex-termux/main/install.sh' work/update.txt
+grep -q 'Update ran successfully' work/update.txt
+
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true
