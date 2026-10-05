@@ -1,0 +1,46 @@
+diff --git a/codex-rs/app-server-daemon/src/backend/pid.rs b/codex-rs/app-server-daemon/src/backend/pid.rs
+index e68e878..e601440 100644
+--- a/codex-rs/app-server-daemon/src/backend/pid.rs
++++ b/codex-rs/app-server-daemon/src/backend/pid.rs
+@@ -22,7 +22,7 @@ use serde::Serialize;
+ use tokio::fs;
+ use tokio::io::AsyncReadExt;
+ use tokio::io::AsyncSeekExt;
+-#[cfg(unix)]
++#[cfg(all(unix, not(target_os = "android")))]
+ use tokio::process::Command;
+ use tokio::time::sleep;
+ 
+@@ -730,7 +730,18 @@ async fn read_process_start_time(pid: u32) -> Result<String> {
+     Ok(read_process_details(pid).await?.1)
+ }
+ 
+-#[cfg(unix)]
++/// A stock Termux has no procps, and its toybox `ps` has no `lstart`. /proc has what the
++/// record needs: the state and the start time, in clock ticks since boot.
++#[cfg(target_os = "android")]
++async fn read_process_details(pid: u32) -> Result<(String, String)> {
++    let stat = fs::read(format!("/proc/{pid}/stat"))
++        .await
++        .with_context(|| format!("failed to read process stat for pid-managed app server {pid}"))?;
++    let (state, start_ticks) = identity::parse_stat(&stat)?;
++    Ok((state, start_ticks.to_string()))
++}
++
++#[cfg(all(unix, not(target_os = "android")))]
+ async fn read_process_details(pid: u32) -> Result<(String, String)> {
+     let output = Command::new("ps")
+         .args(["-p", &pid.to_string(), "-o", "stat=", "-o", "lstart="])
+diff --git a/codex-rs/app-server-daemon/src/backend/pid_identity.rs b/codex-rs/app-server-daemon/src/backend/pid_identity.rs
+index da98bf9..bbd36ca 100644
+--- a/codex-rs/app-server-daemon/src/backend/pid_identity.rs
++++ b/codex-rs/app-server-daemon/src/backend/pid_identity.rs
+@@ -219,7 +219,7 @@ async fn read_boot_id() -> Result<String> {
+ }
+ 
+ #[cfg(any(target_os = "linux", target_os = "android", test))]
+-fn parse_stat(stat: &[u8]) -> Result<(String, u64)> {
++pub(super) fn parse_stat(stat: &[u8]) -> Result<(String, u64)> {
+     // comm (field 2) can contain spaces and closing parentheses. The final ')'
+     // terminates it; splitting the whole line on whitespace miscounts fields.
+     let end = stat

@@ -14,7 +14,16 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 mk_release() {   # mk_release <dir> <with_host:0|1> <label>
   local dir="$1" with_host="$2" label="$3" stage="$T/stage"
   rm -rf "$stage"; mkdir -p "$dir" "$stage"
-  printf '#!/bin/sh\necho "codex-cli 0.160.0 (%s)"\n' "$label" > "$stage/codex"
+  # Also plays the shared background server's CLI: STUB_DAEMON is what `daemon version`
+  # reports, STUB_LOG collects the restarts.
+  cat > "$stage/codex" <<STUB
+#!/bin/sh
+case "\$*" in
+  "app-server daemon version") echo "{\"status\":\"\${STUB_DAEMON:-notRunning}\"}"; exit 0 ;;
+  "app-server daemon restart") echo "restart $label" >> "\${STUB_LOG:-/dev/null}"; exit 0 ;;
+esac
+echo "codex-cli 0.160.0 ($label)"
+STUB
   chmod +x "$stage/codex"
   local members="codex"
   if [ "$with_host" = 1 ]; then
@@ -89,5 +98,30 @@ chmod +x "$T/shim/tar"
 echo "stale-host" > "$T/bin/codex-code-mode-host"
 run_install "$T/new" "$T/shim" >/dev/null
 [ "$("$T/bin/codex-code-mode-host")" = "host new" ] || fail "slow tar listing: the host was dropped or not updated"
+
+echo "7) a running shared server is restarted onto the new release"
+export STUB_LOG="$T/daemon.log"; : > "$STUB_LOG"
+export CODEX_HOME="$T/home"; mkdir -p "$CODEX_HOME/app-server-daemon"; : > "$CODEX_HOME/app-server-daemon/daemon.pid"
+STUB_DAEMON=running run_install "$T/old" >/dev/null
+[ "$(cat "$STUB_LOG")" = "restart old" ] || fail "running server: expected one restart by the new codex, got [$(cat "$STUB_LOG")]"
+
+echo "8) nothing changed: the running server is left alone"
+STUB_DAEMON=running run_install "$T/old" >/dev/null
+[ "$(cat "$STUB_LOG")" = "restart old" ] || fail "no-op install restarted the server"
+
+echo "9) a stale pid file (server not running): no restart"
+: > "$STUB_LOG"
+STUB_DAEMON=notRunning run_install "$T/new" >/dev/null
+[ ! -s "$STUB_LOG" ] || fail "restarted a server that is not running"
+
+echo "10) no server state at all: the server is never queried"
+rm -rf "$CODEX_HOME/app-server-daemon"
+STUB_DAEMON=running run_install "$T/old" >/dev/null
+[ ! -s "$STUB_LOG" ] || fail "restarted without any server state"
+
+echo "11) CODEX_TERMUX_SKIP_DAEMON_RESTART=1 opts out"
+mkdir -p "$CODEX_HOME/app-server-daemon"; : > "$CODEX_HOME/app-server-daemon/daemon.pid"
+CODEX_TERMUX_SKIP_DAEMON_RESTART=1 STUB_DAEMON=running run_install "$T/new" >/dev/null
+[ ! -s "$STUB_LOG" ] || fail "opt-out ignored"
 
 echo "install.sh: all scenarios passed"

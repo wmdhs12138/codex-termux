@@ -1,0 +1,70 @@
+diff --git a/codex-rs/app-server-daemon/src/prepare_install.rs b/codex-rs/app-server-daemon/src/prepare_install.rs
+index ecf2501..69ebba2 100644
+--- a/codex-rs/app-server-daemon/src/prepare_install.rs
++++ b/codex-rs/app-server-daemon/src/prepare_install.rs
+@@ -26,6 +26,65 @@ pub struct InstallRequest {
+ 
+ /// Prepare a missing package while the caller holds the daemon operation lock.
+ pub(super) async fn prepare(daemon: &Daemon, settings: &DaemonSettings) -> Result<()> {
++    #[cfg(target_os = "android")]
++    {
++        let _ = settings;
++        link_current_exe(daemon)
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        prepare_complete_package(daemon, settings).await
++    }
++}
++
++/// Android has no official package layout to copy. The daemon package is a pair of symlinks
++/// to the running executable: the daemon runs the binary that is installed (no second copy
++/// of 300 MB), and `daemon restart` picks up a binary the installer replaced in place.
++/// Only a start without a running daemon gets here, so nothing depends on the old link.
++#[cfg(target_os = "android")]
++fn link_current_exe(daemon: &Daemon) -> Result<()> {
++    let home = daemon
++        .settings_file
++        .parent()
++        .and_then(Path::parent)
++        .context("daemon settings path has no Codex home")?;
++    let root = home.join("packages/app-server-daemon");
++    let release = Path::new("releases/android");
++    let entry = root.join(release).join("bin/codex");
++    let executable = match std::env::current_exe().and_then(|path| path.canonicalize()) {
++        Ok(path) => path,
++        // The binary was replaced while this process runs ("... (deleted)"): keep the link.
++        Err(_) if entry.is_file() => return Ok(()),
++        Err(error) => return Err(error).context("failed to resolve the running executable"),
++    };
++    if std::fs::read_link(&entry).ok().as_deref() != Some(executable.as_path()) {
++        daemon.diagnostic(format_args!(
++            "Linking the daemon to {}...",
++            executable.display()
++        ));
++        replace_symlink(&executable, &entry)?;
++    }
++    let current = root.join("current");
++    if std::fs::read_link(&current).ok().as_deref() != Some(release) {
++        replace_symlink(release, &current)?;
++    }
++    Ok(())
++}
++
++/// rename() over an existing symlink is atomic: readers see the old or the new target.
++#[cfg(target_os = "android")]
++fn replace_symlink(target: &Path, link: &Path) -> Result<()> {
++    let parent = link.parent().context("symlink has no parent")?;
++    std::fs::create_dir_all(parent)?;
++    let staging = tempfile::TempDir::new_in(parent)?;
++    let staged = staging.path().join("link");
++    std::os::unix::fs::symlink(target, &staged)?;
++    std::fs::rename(&staged, link)
++        .with_context(|| format!("failed to select {}", link.display()))
++}
++
++#[cfg_attr(target_os = "android", allow(dead_code))]
++async fn prepare_complete_package(daemon: &Daemon, settings: &DaemonSettings) -> Result<()> {
+     let source = InstallContext::current().package_layout.as_ref();
+     // Keep package replacement state out of the CLI dispatcher's async stack frame.
+     Box::pin(prepare_from_package(

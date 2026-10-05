@@ -37,7 +37,7 @@ pkg upgrade -y "${apt_options[@]}"
 for attempt in 1 2 3; do
   if pkg install -y "${apt_options[@]}" \
        rust clang cmake make binutils coreutils curl git jq openssl liblzma pkg-config \
-       protobuf python tar sed gawk util-linux procps; then
+       protobuf python tar sed gawk util-linux; then
     break
   fi
   [ "$attempt" = 3 ] && { echo "pkg install failed after $attempt attempts" >&2; exit 1; }
@@ -288,9 +288,15 @@ LAST="$(ls "$ROOT/work/mock-code-mode-wait/out" | sort -V | tail -1)"
 python3 "$ROOT/tests/check_code_mode_wait.py" "$ROOT/work/mock-code-mode-wait/out/$LAST"
 
 # The shared background server: rendezvous socket under the Termux prefix, /proc identity,
-# start / reuse / restart / stop (patches 0011 and 0012).
+# start / reuse / restart / stop (patches 0011 to 0014).
 echo "::group::Shared background server lifecycle"
 bash "$ROOT/tests/test_daemon.sh" "$CODEX"
+echo "::endgroup::"
+
+# ...and the real thing: a client attaches to the control socket like the TUI does and runs a
+# Code Mode turn on the daemon's app-server (QuickJS host found next to codex, nested tools).
+echo "::group::Code Mode through the shared background server"
+bash "$ROOT/tests/test_daemon_session.sh" "$CODEX"
 echo "::endgroup::"
 
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not

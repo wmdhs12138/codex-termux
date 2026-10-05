@@ -3,14 +3,12 @@
 #
 #   tests/test_daemon.sh /path/to/codex
 #
-# Needs a real Termux userland (procps `ps`, the Termux prefix); CI runs it inside
-# termux-docker after the build. It covers patches 0011 (rendezvous directory and socket
-# path length) and 0012 (/proc based process identity), neither of which any other test
-# reaches: before them `codex app-server --listen unix://` failed with EACCES on /tmp.
+# Needs a real Termux prefix; CI runs it inside termux-docker after the build. It covers
+# patches 0011 (rendezvous directory and socket path length), 0012 (/proc based process
+# identity), 0013 (the daemon "package" is linked to the running codex, nothing to install) and
+# 0014 (no `ps`). Before 0011 `codex app-server --listen unix://` failed with EACCES on /tmp.
 #
-# The managed package is seeded by hand (a symlink to the binary under test): the daemon
-# only installs its own copy from an official package layout, which this port does not
-# ship yet. Starting, probing, restarting and stopping do not care.
+# DAEMON_TEST_SEED=1 links the managed package by hand, for a codex built before patch 0013.
 set -Eeuo pipefail
 
 CODEX="$(readlink -f "$1")"
@@ -18,8 +16,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Not under $PREFIX/tmp: Codex refuses to create its helper binaries in a temp dir.
 export CODEX_HOME="${DAEMON_TEST_HOME:-$ROOT/work/daemon-home}"
 rm -rf "$CODEX_HOME"
-mkdir -p "$CODEX_HOME/packages/app-server-daemon/current/bin"
-ln -s "$CODEX" "$CODEX_HOME/packages/app-server-daemon/current/bin/codex"
+mkdir -p "$CODEX_HOME"
+if [ "${DAEMON_TEST_SEED:-0}" = 1 ]; then
+  mkdir -p "$CODEX_HOME/packages/app-server-daemon/current/bin"
+  ln -s "$CODEX" "$CODEX_HOME/packages/app-server-daemon/current/bin/codex"
+fi
 
 VERSION="$("$CODEX" --version | awk '{print $2}')"
 SOCKET="$CODEX_HOME/app-server-control/app-server-control.sock"
@@ -47,6 +48,15 @@ echo "$out"
 PID="$(field "$out" pid)"
 alive "$PID" || fail "daemon pid $PID is not running"
 tr '\0' ' ' <"/proc/$PID/cmdline" | grep -q 'app-server --listen unix://' || fail "unexpected daemon command line"
+
+echo "== managed package is linked to the running codex (0013)"
+MANAGED="$CODEX_HOME/packages/app-server-daemon/current/bin/codex"
+[ "$(field "$out" managedCodexPath)" = "$MANAGED" ] || fail "unexpected managed path: $(field "$out" managedCodexPath)"
+[ "$(readlink -f "$MANAGED")" = "$CODEX" ] || fail "$MANAGED does not resolve to $CODEX"
+if [ "${DAEMON_TEST_SEED:-0}" != 1 ]; then
+  [ "$(readlink "$CODEX_HOME/packages/app-server-daemon/current")" = releases/android ] || fail "current is not the android release link"
+  [ -L "$CODEX_HOME/packages/app-server-daemon/releases/android/bin/codex" ] || fail "release entry is not a symlink"
+fi
 
 echo "== rendezvous socket (0011)"
 [ -L "$SOCKET" ] || fail "$SOCKET is not a symlink"
@@ -93,5 +103,14 @@ alive "$NEW" && fail "daemon $NEW survived stop"
 [ ! -S "$(readlink "$SOCKET" 2>/dev/null || echo /nonexistent)" ] || fail "socket left behind after stop"
 out="$("$CODEX" app-server daemon stop)"
 [ "$(field "$out" status)" = notRunning ] || fail "second stop did not report 'notRunning': $out"
+
+echo "== bootstrap (the SSH / remote-control entry point) works without an installable package"
+out="$("$CODEX" app-server daemon bootstrap)"
+echo "$out"
+[ "$(field "$out" status)" = bootstrapped ] || fail "bootstrap did not report 'bootstrapped'"
+[ "$(field "$out" autoUpdateEnabled)" = false ] || fail "the daemon updater must stay off (updates come from codex update)"
+[ "$(field "$out" appServerVersion)" = "$VERSION" ] || fail "server version != $VERSION"
+out="$("$CODEX" app-server daemon stop)"
+[ "$(field "$out" status)" = stopped ] || fail "stop after bootstrap did not report 'stopped'"
 
 echo "daemon test: OK"

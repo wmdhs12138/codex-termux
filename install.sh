@@ -93,3 +93,19 @@ install_one codex
 
 echo "install: installed $DEST/codex"
 "$DEST/codex" --version
+
+# The shared background server (`codex app-server daemon`) keeps running the binary it was
+# started from, and new clients would attach to that old server. Restart it onto the release
+# that was just installed. Work in progress on it is interrupted, so only a running one.
+if [ "${CODEX_TERMUX_SKIP_DAEMON_RESTART:-0}" != "1" ]; then
+  home="${CODEX_HOME:-${HOME:-}/.codex}"
+  if [ -e "$home/app-server-daemon/daemon.pid" ]; then
+    state="$(CODEX_HOME="$home" "$DEST/codex" app-server daemon version 2>/dev/null || true)"
+    case "$state" in
+      *'"status":"running"'*)
+        echo "install: restarting the shared background server on the new release"
+        CODEX_HOME="$home" "$DEST/codex" app-server daemon restart >/dev/null 2>&1 \
+          || echo "install: could not restart it; run: codex app-server daemon restart" >&2 ;;
+    esac
+  fi
+fi

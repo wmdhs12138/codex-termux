@@ -60,6 +60,8 @@ codex update
 | `0010-code-mode-runtime-quickjs-wiring.patch` | 接线：把 `code-mode-runtime` 的依赖从 V8 换成 QuickJS（rquickjs），并把终止句柄的类型换成自己的 `TerminateHandle`。运行时本体见下面的 overlay。 |
 | `0011-daemon-socket-directory-on-android.patch` | 共享后台服务（以及 `codex remote-control`）的控制 socket 放在写死的 `/tmp/codex-daemon-<uid>/` 下，而 Android 上 `/tmp` 对应用不可写，`codex app-server --listen unix://` 一启动就报 `Permission denied (os error 13)`。补丁改用 Termux 前缀下的 `tmp`；这个前缀很长，64 位十六进制的物理 socket 路径会达到 119 字节，超过 `sun_path` 的 107 字节，所以同时把摘要截成 32 位（87 字节）。 |
 | `0012-daemon-process-identity-on-android.patch` | 守护进程用 `/proc/<pid>/stat` 加 `boot_id` 校验进程身份，上游只对 linux、macos 启用，其他平台退回去解析 `ps -o lstart` 的输出（在这类设备上 `/proc/stat` 不可读，该输出的日期不可信）。补丁让 android 走与 Linux 相同的 `/proc` 路径。 |
+| `0013-daemon-link-package-to-running-exe-on-android.patch` | 启动守护进程前，上游要先准备一份「package」：把调用它的官方完整 package（`codex-package.json`、`bin/codex`、`codex-path/rg` 等）整份拷到 `~/.codex/packages/app-server-daemon/`，单文件构建会报 `no complete local package`（补丁 0004 当初关掉自动启动的原因）。Android 上改为建两个符号链接：`packages/app-server-daemon/current` → `releases/android`，`releases/android/bin/codex` → 正在运行的 `codex`。守护进程运行的就是已安装的那个二进制，不多占 300 MB；安装器原位替换二进制后，`daemon restart` 即可换上新的。 |
+| `0014-daemon-start-time-from-proc-on-android.patch` | 记录守护进程的启动时间时上游调用 `ps -o lstart`，而 Termux 默认没有 procps（系统自带 toybox 的 `ps` 没有 `lstart`）。Android 上改读 `/proc/<pid>/stat`。 |
 
 补丁采用精确匹配：上游结构变化导致补丁不再适用时，构建会直接失败，而不是产出未验证的文件。
 
@@ -76,7 +78,7 @@ Code Mode 让模型写一段 JavaScript 来编排工具调用，上游用 V8 执
 
 - **没有沙箱隔离。** Android 没有可用的内核沙箱机制，`codex sandbox` 不可用。`workspace-write`、`network_access = false` 等沙箱设置对 shell 命令**不会被强制执行**，命令以当前 Termux 用户的权限运行；只有 `apply_patch` 会在进程内检查目标路径是否在可写范围内。审批提示属于应用层逻辑，未做改动，请据此评估风险，需要把关时使用 `approval_policy = "untrusted"`。
 - **Code Mode 用 QuickJS 而不是 V8。** 脚本能正常运行，但没有 `Intl`、`Temporal` 和 ICU 区域数据（例如 `Intl.DateTimeFormat` 未定义，`toLocaleString` 不按区域格式化）；报错文本里 QuickJS 的措辞与 V8 不同；纯 CPU 密集的脚本会更慢。典型的"编排几次工具调用"不受影响。如果宿主程序 `codex-code-mode-host` 缺失（例如装的是不含它的旧版本），补丁 0005 会让模型回退到直连工具。
-- **共享后台服务仍是实验性的。** `codex app-server --listen unix://` 能正常监听，守护进程的启动、复用、重启、停止由 CI 测试覆盖（预置一个指向当前二进制的包目录）。但 `codex app-server daemon` 自己安装/更新守护进程要求官方的完整 package 目录结构，`codex agents` 同样，这两项暂不支持；交互界面默认仍以嵌入式运行，可用 `features.daemon_auto_start` 手动打开（自动启动目前会因缺少 package 目录而失败，并提示加 `--no-daemon`）。
+- **共享后台服务仍是实验性的，默认关闭。** `codex app-server daemon start/restart/stop/version/bootstrap` 可用：守护进程直接运行已安装的二进制，CI 覆盖了启动、复用、重启、停止，以及一个客户端经控制 socket 连上去（与交互界面的附着方式相同）跑完整的 Code Mode 会话；`codex update` 之后安装器会把正在运行的守护进程重启到新版本（`CODEX_TERMUX_SKIP_DAEMON_RESTART=1` 可关闭）。不支持：`daemon update`（安装官方 package）、守护进程的自动更新器、`codex agents`。交互界面默认仍以嵌入式运行，可用 `features.daemon_auto_start = true` 打开；常驻进程可能被 Android 的幽灵进程限制杀掉，之后自动启动会报错并提示加 `--no-daemon`。`codex remote-control` 没有在 CI 中测试（它需要 ChatGPT 账号）。
 - **剪贴板图片粘贴不可用。** 这是上游在 Android 上的既有行为。
 - **凭据存放在 `$CODEX_HOME/auth.json`**（默认 `file` 模式），Android 上没有系统钥匙串。
 
