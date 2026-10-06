@@ -57,7 +57,8 @@ ACTUAL="$(python3 -c 'import json; print(json.load(open("dist/build-manifest.jso
 echo "::group::Conformance: upstream's code-mode runtime tests on QuickJS"
 # The V8 runtime ships ~70 behaviour tests that go through the service API. Run them against
 # the QuickJS replacement. Three are expected to differ and are skipped by name:
-#   - the two ICU tests need Intl and locale data, which QuickJS does not have;
+#   - the two ICU tests format a date in French, but only en-US has locale data here (the Intl
+#     overlay falls back to en-US, as the specification prescribes for unsupported locales);
 #   - the circular-JSON test pins V8's wording ("Converting circular structure to JSON").
 (
   export WORK="$ROOT/work"
@@ -261,9 +262,9 @@ cat work/update.txt
 grep -q 'wmdhs12138/codex-termux/main/install.sh' work/update.txt
 grep -q 'Update ran successfully' work/update.txt
 
-# 5. Code Mode end to end. The QuickJS host runs real scripts: the fake model makes five `exec`
-# calls (text, a nested tool call, store/load across calls, exit(), timers, a runtime error)
-# and the checker looks at exactly what the model is sent back for each.
+# 5. Code Mode end to end. The QuickJS host runs real scripts: the fake model makes nine `exec`
+# calls (text, a nested tool call, store/load across calls, exit(), timers, a runtime error,
+# nested apply_patch, Intl) and the checker looks at exactly what the model is sent back for each.
 E2E_CM="$ROOT/work/e2e-code-mode"; rm -rf "$E2E_CM"; mkdir -p "$E2E_CM/cwd"
 OUTSIDE_NESTED="$ROOT/work/outside-nested.txt"; rm -f "$OUTSIDE_NESTED"
 python3 "$ROOT/tests/code_mode_script.py" "$OUTSIDE_NESTED" > "$E2E_CM/script.json"

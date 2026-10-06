@@ -36,7 +36,7 @@ codex update
 | 功能 | 状态 |
 | --- | --- |
 | 交互界面、`codex exec`、登录、`apply_patch`、网络搜索 | 可用，CI 里真实执行并检查 |
-| Code Mode（模型写 JavaScript 编排工具调用） | 可用，引擎是 QuickJS，没有 `Intl`、`Temporal` |
+| Code Mode（模型写 JavaScript 编排工具调用） | 可用，引擎是 QuickJS；`Intl`、`toLocaleString`、`localeCompare` 由自带实现补上（只有英语区域数据），没有 `Temporal`，详见 [限制](docs/limitations.md) |
 | 共享后台服务、`codex agents` | 可用，和官方一样**默认开启**，[详情](docs/daemon-and-remote-control.md) |
 | 远程控制（ChatGPT 应用连到这台手机） | 可用，和官方一样**需要主动开启**并配对，[详情](docs/daemon-and-remote-control.md) |
 | 操作系统沙箱、`codex sandbox` | **不可用**（Android 内核限制，见下） |

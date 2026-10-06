@@ -1,0 +1,14 @@
+diff --git a/codex-rs/code-mode-runtime/Cargo.toml b/codex-rs/code-mode-runtime/Cargo.toml
+index b724578..d435610 100644
+--- a/codex-rs/code-mode-runtime/Cargo.toml
++++ b/codex-rs/code-mode-runtime/Cargo.toml
+@@ -24,6 +24,9 @@ tokio-util = { workspace = true, features = ["rt"] }
+ tracing = { workspace = true }
+ # QuickJS-ng instead of V8: rusty_v8 has no Android build.
+ rquickjs = { version = "=0.14.0", default-features = false, features = ["std", "bindgen", "loader"] }
++# IANA time zone database for Intl.DateTimeFormat (QuickJS has no ICU). Reads Android's tzdata,
++# with a bundled copy as the fallback. Pinned to the version the workspace lockfile already has.
++jiff = { version = "=0.2.23", features = ["tzdb-bundle-always"] }
+ 
+ [dev-dependencies]
+ pretty_assertions = { workspace = true }

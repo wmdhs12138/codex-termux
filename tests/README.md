@@ -11,7 +11,8 @@
 | `test_subcommands.sh <codex>` | 不需要网络和账号的子命令：一个 stdio MCP 服务器（`mcp_echo.py`）被模型经 Code Mode 调用，`plugin` 用本地市场走完添加、安装、列表、卸载，`exec resume`、`archive` / `unarchive` / `delete`、`migrate-rollouts`、`features`、`completion`。 |
 | `daemon_session.py` | 上面会话测试用的最小客户端：标准库实现的 WebSocket over UDS + JSON-RPC（`initialize`、`thread/start`、`turn/start`，等到 `turn/completed`）。 |
 | `mock_responses.py` | 假的 OpenAI Responses API：记录每个请求到 `request-N.json`，并按脚本回答，让 `codex exec` 和守护进程不用网络和账号就能被测试。 |
-| `code_mode_script.py` / `check_code_mode.py` | Code Mode 的主测试：假模型发出多次 `exec`（文本、嵌套工具调用、`store`/`load`、`exit()`、定时器、运行时错误、工作区外 `apply_patch` 被拒），检查模型收到的结果。 |
+| `code_mode_script.py` / `check_code_mode.py` | Code Mode 的主测试：假模型发出多次 `exec`（文本、嵌套工具调用、`store`/`load`、`exit()`、定时器、运行时错误、工作区外 `apply_patch` 被拒、`Intl` 与 `toLocaleString`/`localeCompare`），检查模型收到的结果。 |
+| `intl/` | 维护 QuickJS 里 `Intl` 实现的工具（对拍、生成数据和期望值），需要带完整 ICU 的 Node，不进 CI；说明见 [intl/README.md](intl/README.md)。Rust 侧的测试在 `overlay/.../runtime/intl.rs`。 |
 | `code_mode_wait_script.py` / `check_code_mode_wait.py` | 超过让出时间的脚本：`exec` 先返回已有输出和 cell id，`wait` 取回剩下的部分。 |
 | `tool_names.py` | 打印一个请求里提供给模型的所有工具名（兼容 `additional_tools` 与 `namespace`）。 |
 

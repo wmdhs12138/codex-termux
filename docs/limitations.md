@@ -7,7 +7,13 @@
 - **没有操作系统沙箱。** 在测试手机上：Landlock 系统调用返回 `ENOSYS`（内核没有实现），`unshare(CLONE_NEWUSER)` 返回 `EINVAL`（所以上游用的 bubblewrap 不可能运行），进程本身已被 zygote 的 seccomp 过滤器约束。`codex sandbox` 会报"当前系统不支持"。`workspace-write`、`network_access = false` 等设置对 shell 命令**不会被强制执行**，命令以当前 Termux 用户的权限运行；只有 `apply_patch` 会在进程内检查目标路径是否在可写范围内。审批提示属于应用层逻辑，没有改动：需要把关时用 `approval_policy = "untrusted"`。
 - **语音和实时对话。** 音频相关的 crate 只为 macOS、linux-gnu、Windows 构建；TUI 里 `/voice` 会提示无法识别。
 - **剪贴板图片粘贴。** 上游自己在 Android 上就关掉了。
-- **Code Mode 用 QuickJS 而不是 V8。** V8 没有 Android 构建。脚本能正常运行，但没有 `Intl`、`Temporal` 和 ICU 区域数据（例如 `Intl.DateTimeFormat` 未定义，`toLocaleString` 不按区域格式化），报错措辞与 V8 不同，纯 CPU 密集的脚本更慢。典型的"编排几次工具调用"不受影响。宿主程序 `codex-code-mode-host` 缺失时（例如装的是不含它的旧版本），补丁 0005 让模型回退到直连工具。
+- **Code Mode 用 QuickJS 而不是 V8。** V8 没有 Android 构建。脚本能正常运行，差别是：报错措辞与 V8 不同，纯 CPU 密集的脚本更慢，没有 `Temporal`。宿主程序 `codex-code-mode-host` 缺失时（例如装的是不含它的旧版本），补丁 0005 让模型回退到直连工具。
+- **`Intl` 是自带的精简实现，只有英语区域数据。** QuickJS 不带 ICU，`overlay/` 里用 JS 实现了 `Intl.NumberFormat`、`DateTimeFormat`、`Collator`、`PluralRules`、`RelativeTimeFormat`、`ListFormat`、`Segmenter`、`Locale`，并接管 `toLocaleString`、`localeCompare`（QuickJS 原生的 `localeCompare` 按码点比较，`["b","a","C"]` 会排成 `C,a,b`）。第一次用到时才加载，不用的脚本不付代价。约 1500 条表达式的结果与完整 ICU（Node）逐条核对一致。和 V8 的差别：
+  - 请求其他区域（`de`、`zh-CN`……）会回落到 `en-US`，`resolvedOptions().locale` 如实报告，`supportedLocalesOf` 不把它们算作支持。这是规范规定的回落方式，但输出是英文格式，不会报错。
+  - 时区用完整的 IANA 数据库（读 Android 的 tzdata，读不到时用内置副本），名称只有 en-US 的写法：美国时区是 `EST`、`Pacific Standard Time`，其余是 `GMT+8`（长名如 `China Standard Time`）。已知的偏差：`resolvedOptions().timeZone` 返回你传入的名字，不会像 V8 那样把 `Asia/Kolkata` 改成 `Asia/Calcutta`。
+  - 没有 `Intl.DisplayNames`、`DurationFormat`、`supportedValuesOf`，`DateTimeFormat` 没有 `formatRange`、`dayPeriod`；对 `hour` 加 `second` 却没有 `minute` 这类冷门字段组合，输出和 ICU 不同。
+  - 排序对拉丁字母按 ICU 的规则（大小写、重音、数字、标点）；其他文字只是按码点近似，不做拼音等区域排序。分词对中日文是逐字，不是词典分词。
+  - 上游有两个用法语格式化日期的 ICU 测试，因此仍在 CI 里按名字跳过。
 - **凭据存在 `$CODEX_HOME/auth.json`。** Android 上没有系统钥匙串，上游的 `keyring` 在这里没有后端。
 
 ## 缺失，但有办法补

@@ -9,6 +9,7 @@
 mod audio;
 mod callbacks;
 mod globals;
+mod intl;
 mod module_loader;
 mod timers;
 mod value;

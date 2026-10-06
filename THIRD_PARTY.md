@@ -8,6 +8,8 @@ vendor Codex source.
 | [openai/codex](https://github.com/openai/codex) | Apache-2.0 | Fetched at build time by tag. `patches/` are modifications of its files and remain under Apache-2.0. The release tarball includes upstream `LICENSE` and `NOTICE`. |
 | [rquickjs](https://github.com/DelSkayn/rquickjs) 0.14 | MIT | Rust bindings used by `overlay/`, which replaces the V8 layer of Codex's Code Mode. |
 | [QuickJS-ng](https://github.com/quickjs-ng/quickjs) | MIT | The JavaScript engine, compiled into `codex-code-mode-host` through `rquickjs-sys`. |
+| [jiff](https://github.com/BurntSushi/jiff) 0.2 | MIT OR Unlicense | IANA time zone database access for `Intl.DateTimeFormat` in Code Mode (patch 0016); reads Android's tzdata and bundles a copy as the fallback. |
+| Unicode CLDR / ICU data | Unicode License v3 | The en-US tables in `overlay/.../runtime/intl_data.json` (currency symbols and names, unit patterns, relative time, list patterns, time zone names) were generated from ICU's data by `tests/intl/gen-data.mjs`. See <https://www.unicode.org/license.txt>. |
 | Rust, Termux packages | various | Installed in the build container; not redistributed. |
 
 Release binaries are statically linked against Rust crates pulled in by the upstream

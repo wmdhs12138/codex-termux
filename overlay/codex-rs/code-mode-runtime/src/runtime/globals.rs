@@ -45,6 +45,9 @@ pub(super) fn install_globals<'js>(ctx: &Ctx<'js>, state: &SharedState) -> Resul
             .map_err(|error| format!("failed to remove global `{name}`: {error}"))?;
     }
 
+    // QuickJS has no Intl; V8 had it, so scripts may rely on it.
+    super::intl::install_intl(ctx)?;
+
     let enabled_tools = state.borrow().enabled_tools.clone();
     let tools = Object::new(ctx.clone())
         .map_err(|error| format!("failed to allocate the tools object: {error}"))?;

@@ -23,6 +23,15 @@ sha256sum --check --quiet /path/to/codex-termux/overlay/UPSTREAM.sha256
 5. 要有测试：在 `tests/` 加用例，并先在手机上对现有的 Release 二进制跑一遍；最好再对改动前的二进制跑一次，确认它会失败。
 6. 提交带 `[skip ci]`，然后手动 `gh workflow run build.yml -f version=<版本> -f recut=true`，避免一次推送触发两轮构建。
 
+## 改 `Intl` 的实现
+
+`overlay/.../runtime/intl.js` 的修改流程（需要 `pkg install nodejs`，它自带完整 ICU，用作参照物）：
+
+1. 改 `intl.js`，然后 `cd tests/intl && node fuzz.mjs`：几万个组合与原生 `Intl` 对拍，应只剩一条预期的差异（`supportedLocalesOf` 里的 `zh-CN`）。`ONLY=date SHOW=10 node fuzz.mjs` 只跑一组。
+2. 数据表（货币、单位、时区名称……）来自 `node gen-data.mjs > ../../overlay/codex-rs/code-mode-runtime/src/runtime/intl_data.json`（在 `tests/intl/` 里运行）。参照引擎的 ICU/CLDR 或时区库版本变了才需要重新生成；`tznames.txt` 是 jiff 内置库里的全部时区名（含别名），jiff 升级后重新导出。
+3. `node gen-cases.mjs` 重新生成 `runtime/intl_cases.json`（Rust 测试用的期望值）；有意的差异写在这个脚本的 `deviations` 里。
+4. `cargo test -p codex-code-mode-runtime`（和上面第 4 步一样，只在手机上跑这个 crate；整套约 2 秒，冷编译约 10 分钟）。
+
 ## 发版
 
 - tag 是 `vX.Y.Z`；同一个上游版本因为补丁变化重新发布，tag 是 `vX.Y.Z-rN`（不可变发布会永久占用 tag 名）。
