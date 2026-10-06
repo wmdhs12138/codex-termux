@@ -122,20 +122,23 @@ test -e "$CODEX_HOME/thread-writer-locks/.coordination.lock"
 "$CODEX" logout >/dev/null
 test ! -e "$CODEX_HOME/auth.json"
 
-# The interactive TUI must start without the shared daemon. Upstream auto-starts
-# it, which needs the official package layout and aborts with "no complete local
-# package"; patch 0004 turns that off on Android. Run it on a pty and check the
-# first screen: it must enter the alternate screen instead of printing the error.
+# The interactive TUI with default settings must reach its first screen. As in upstream it
+# auto-starts the shared daemon, which aborts with "no complete local package" unless it runs
+# from an official package layout; on Android the daemon links its own package (patch 0013).
+# Run it on a pty and check the first screen: it must enter the alternate screen instead of
+# printing the error. (tests/test_daemon_tui.sh covers the daemon side in detail.)
 rm -rf "$CODEX_HOME"; mkdir -p "$CODEX_HOME"
 set +e
 timeout -s KILL 10 script -qfec "$CODEX" work/tui-smoke.raw </dev/null >/dev/null 2>&1
 set -e
 strings -n 4 work/tui-smoke.raw > work/tui-smoke.txt
 if grep -q 'no complete local package' work/tui-smoke.txt; then
-  echo "smoke: TUI tried to use the shared daemon" >&2
+  echo "smoke: the TUI could not use the shared daemon" >&2
   exit 1
 fi
 grep -q '?1049h' work/tui-smoke.txt
+# The smoke run left the daemon it started behind; the tests below remove CODEX_HOME.
+"$CODEX" app-server daemon stop >/dev/null 2>&1 || true
 
 # --- Tests against a fake Responses API (no network, no account) -----------------
 # Codex is pointed at tests/mock_responses.py through a custom provider, so we can
@@ -299,7 +302,8 @@ echo "::group::Code Mode through the shared background server"
 bash "$ROOT/tests/test_daemon_session.sh" "$CODEX"
 echo "::endgroup::"
 
-# The TUI itself: with daemon_auto_start it starts the daemon and attaches instead of embedding.
+# The TUI itself: it starts the daemon and attaches instead of embedding (the upstream default),
+# and the two ways to opt out.
 echo "::group::TUI with the shared background server"
 bash "$ROOT/tests/test_daemon_tui.sh" "$CODEX"
 echo "::endgroup::"
