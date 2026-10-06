@@ -10,7 +10,7 @@
 - **Code Mode 用 QuickJS 而不是 V8。** V8 没有 Android 构建。脚本能正常运行，差别是：报错措辞与 V8 不同，纯 CPU 密集的脚本更慢，没有 `Temporal`。宿主程序 `codex-code-mode-host` 缺失时（例如装的是不含它的旧版本），补丁 0005 让模型回退到直连工具。
 - **`Intl` 是自带的精简实现，只有英语区域数据。** QuickJS 不带 ICU，`overlay/` 里用 JS 实现了 `Intl.NumberFormat`、`DateTimeFormat`、`Collator`、`PluralRules`、`RelativeTimeFormat`、`ListFormat`、`Segmenter`、`Locale`，并接管 `toLocaleString`、`localeCompare`（QuickJS 原生的 `localeCompare` 按码点比较，`["b","a","C"]` 会排成 `C,a,b`）。第一次用到时才加载，不用的脚本不付代价。约 1500 条表达式的结果与完整 ICU（Node）逐条核对一致。和 V8 的差别：
   - 请求其他区域（`de`、`zh-CN`……）会回落到 `en-US`，`resolvedOptions().locale` 如实报告，`supportedLocalesOf` 不把它们算作支持。这是规范规定的回落方式，但输出是英文格式，不会报错。
-  - 时区用完整的 IANA 数据库（读 Android 的 tzdata，读不到时用内置副本），名称只有 en-US 的写法：美国时区是 `EST`、`Pacific Standard Time`，其余是 `GMT+8`（长名如 `China Standard Time`）。已知的偏差：`resolvedOptions().timeZone` 返回你传入的名字，不会像 V8 那样把 `Asia/Kolkata` 改成 `Asia/Calcutta`。
+  - 时区用完整的 IANA 数据库（编进二进制的副本，随版本更新，不读 Android 系统可能过期的 tzdata；本地时区的偏移和 `Date` 一致），名称只有 en-US 的写法：美国时区是 `EST`、`Pacific Standard Time`，其余是 `GMT+8`（长名如 `China Standard Time`）。已知的偏差：`resolvedOptions().timeZone` 返回你传入的名字，不会像 V8 那样把 `Asia/Kolkata` 改成 `Asia/Calcutta`。
   - 没有 `Intl.DisplayNames`、`DurationFormat`、`supportedValuesOf`，`DateTimeFormat` 没有 `formatRange`、`dayPeriod`；对 `hour` 加 `second` 却没有 `minute` 这类冷门字段组合，输出和 ICU 不同。
   - 排序对拉丁字母按 ICU 的规则（大小写、重音、数字、标点）；其他文字只是按码点近似，不做拼音等区域排序。分词对中日文是逐字，不是词典分词。
   - 上游有两个用法语格式化日期的 ICU 测试，因此仍在 CI 里按名字跳过。

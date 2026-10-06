@@ -4,13 +4,14 @@
 //! scope) plus `intl_data.json` (currency, unit and time zone name tables generated from a
 //! full-ICU engine by `tests/intl/gen-data.mjs`). The one thing JavaScript cannot do for itself is
 //! the IANA time zone database, so this module provides it through three helpers backed by
-//! `jiff`, which reads Android's own tzdata and falls back to a bundled copy.
+//! `jiff` and the copy of the database built into the binary.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
+use jiff::tz::TimeZoneDatabase;
 use rquickjs::Ctx;
 use rquickjs::Function;
 use rquickjs::Object;
@@ -22,11 +23,21 @@ const SOURCE: &str = include_str!("intl.js");
 const LAZY_SOURCE: &str = include_str!("intl_lazy.js");
 const DATA: &str = include_str!("intl_data.json");
 
+/// The IANA database named zones are answered from: the copy built into the binary (jiff-tzdb),
+/// as V8 answers from the copy in its own ICU data. Android's copy can be years older: the AOSP 9
+/// tzdata in termux-docker still has Brazil's daylight saving time, abolished in 2019, and so do
+/// phones that stopped getting updates. The local zone does not come from here (see `intl.js`),
+/// so it always agrees with `Date`.
+fn database() -> &'static TimeZoneDatabase {
+    static DATABASE: OnceLock<TimeZoneDatabase> = OnceLock::new();
+    DATABASE.get_or_init(TimeZoneDatabase::bundled)
+}
+
 /// The database's spelling of `name` (`america/new_york` -> `America/New_York`), if it is a zone.
 fn canonical_zone(name: &str) -> Option<String> {
     static NAMES: OnceLock<HashMap<String, String>> = OnceLock::new();
     let names = NAMES.get_or_init(|| {
-        jiff::tz::db()
+        database()
             .available()
             .map(|zone| {
                 let name = zone.as_str();
@@ -43,7 +54,7 @@ fn zone_offset_seconds(name: &str, epoch_ms: f64) -> i32 {
     if !epoch_ms.is_finite() {
         return 0;
     }
-    let Ok(zone) = TimeZone::get(name) else {
+    let Ok(zone) = database().get(name) else {
         return 0;
     };
     let Ok(timestamp) = Timestamp::from_millisecond(epoch_ms as i64) else {
@@ -169,6 +180,8 @@ mod tests {
             assert_eq!(zone_offset_seconds("America/New_York", 1_735_787_045_000.0), -5 * 3600);
             assert_eq!(zone_offset_seconds("America/New_York", 1_751_643_000_000.0), -4 * 3600);
             assert_eq!(zone_offset_seconds("Asia/Kolkata", 1_735_787_045_000.0), 5 * 3600 + 1800);
+            // Brazil has had no daylight saving time since 2019, whatever the system tzdata says.
+            assert_eq!(zone_offset_seconds("America/Sao_Paulo", 1_735_787_045_000.0), -3 * 3600);
             assert_eq!(canonical_zone("america/new_york").as_deref(), Some("America/New_York"));
             assert_eq!(canonical_zone("Not/AZone"), None);
             let formatted = eval_string(

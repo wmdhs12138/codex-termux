@@ -24,7 +24,7 @@
 | `0013-daemon-link-package-to-running-exe-on-android.patch` | 启动守护进程前，上游要先准备一份「package」：把调用它的官方完整 package（`codex-package.json`、`bin/codex`、`codex-path/rg` 等）整份拷到 `~/.codex/packages/app-server-daemon/`，单文件构建会报 `no complete local package`（早期版本因此在 Android 上关掉了自动启动）。Android 上改为建两个符号链接：`packages/app-server-daemon/current` → `releases/android`，`releases/android/bin/codex` → 正在运行的 `codex`。守护进程运行的就是已安装的那个二进制，不多占 300 MB；安装器原位替换二进制后，`daemon restart` 即可换上新的。 |
 | `0014-daemon-start-time-from-proc-on-android.patch` | 记录守护进程的启动时间时上游调用 `ps -o lstart`，而 Termux 默认没有 procps（系统自带 toybox 的 `ps` 没有 `lstart`）。Android 上改读 `/proc/<pid>/stat`。 |
 | `0015-remote-control-server-name-on-android.patch` | 远程控制向 ChatGPT 上报、并显示在设备列表里的名字来自 `gethostname()`，Android 上永远是 `localhost`，分不清是哪台设备。补丁改成 `<品牌> · Termux`（读系统属性 `ro.product.brand`，没有则用 `ro.product.manufacturer`），例如 `vivo · Termux`；读不到属性时仍用主机名。已存在的登记会在下次连接时改名。 |
-| `0016-code-mode-runtime-tz-database.patch` | 给 `code-mode-runtime` 加 `jiff` 依赖（版本固定在上游锁文件里已有的 0.2.23，并打开内置 tzdb 作后备），为 overlay 里的 `Intl.DateTimeFormat` 提供 IANA 时区数据：系统时区读 Android 的 `persist.sys.timezone`，其他时区读系统 tzdata，读不到时用内置副本。 |
+| `0016-code-mode-runtime-tz-database.patch` | 给 `code-mode-runtime` 加 `jiff` 依赖（版本固定在上游锁文件里已有的 0.2.23，并打开 `tzdb-bundle-always` 把 tzdb 编进二进制），为 overlay 里的 `Intl.DateTimeFormat` 提供 IANA 时区数据：系统时区读 Android 的 `persist.sys.timezone`，其他时区读编进二进制的 tzdb 副本（同 V8 用自带 ICU 的数据；Android 系统的 tzdata 可能很旧，例如 AOSP 9 的还有 2019 年已废止的巴西夏令时）。 |
 
 ## Code Mode 的 JS 引擎：overlay
 
