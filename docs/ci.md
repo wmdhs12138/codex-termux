@@ -30,6 +30,7 @@ release ── 唯一有写权限的任务：发布 tarball、SHA-256 和 build-
 | 假 Responses API（`tests/mock_responses.py`） | 模型实际拿到的工具列表；`apply_patch` 在工作区内真的写出文件、在工作区外被拒；网络搜索默认是实时；`codex update` 执行的命令是本项目的 `install.sh` |
 | Code Mode 端到端 | 假模型发出多次 `exec`，检查文本输出、嵌套工具调用、`store`/`load`、`exit()`、定时器、运行时错误；超过让出时间的脚本与 `wait` |
 | 共享后台服务 | `tests/test_daemon.sh`、`tests/test_daemon_session.sh`、`tests/test_daemon_tui.sh`（见 [../tests/README.md](../tests/README.md)） |
+| 子命令 | `tests/test_subcommands.sh`：MCP、plugin、会话管理、features、completion |
 | 依赖 | 二进制的动态库依赖必须在 Termux 默认就有的范围内 |
 
 `codex doctor` 和对真实端点的连通性检查只输出到日志，不作为失败条件（数据中心 IP 可能被限流）。

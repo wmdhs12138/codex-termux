@@ -24,6 +24,14 @@
 - `codex app-server daemon update` 和守护进程的自动更新器：官方安装器装的是官方的 Linux 二进制，不能在 Android 上运行。更新走 `codex update`，见 [daemon-and-remote-control.md](daemon-and-remote-control.md)。
 - 桌面应用独有的功能（电脑控制、浏览器控制、应用内听写，以及 macOS、Windows 的启动器）不是命令行功能。
 
-## 还没验证过
+## 子命令的验证情况
 
-`codex cloud`（需要账号）、`codex plugin` 和需要 Node 的 MCP 服务器、IDE 上下文通信、桌面通知。
+下面这些在隔离的 `CODEX_HOME` 里、用本地假模型（或只读调用）真实跑过，**都可用**；其中不需要网络和账号的部分已进 CI（`tests/test_subcommands.sh`）：
+
+- `mcp add / list / get / remove`，以及一个 stdio MCP 服务器被模型经 Code Mode 调用（服务器启动、`initialize`、`tools/list`、`tools/call` 全部正常）。注意：`codex exec` 把审批策略强制为 never，没有标成只读的 MCP 工具会返回"需要审批"，这是上游行为。
+- `plugin marketplace add / list / remove`、`plugin add / list / remove`（本地市场，安装到 `$CODEX_HOME/plugins/cache`）。
+- `review`、`exec resume --last`、`resume --last` 和 `fork --last`（交互式会话；`exec` 建的会话不在恢复列表里）、`archive` / `unarchive` / `delete`、`queue`（需要共享后台服务）、`migrate-rollouts`。
+- `cloud list`（在真实账号上只读调用成功，当时账号里没有云任务）。
+- `features list / enable / disable`、`completion`、`debug models` / `prompt-input`、`exec-server`（监听并完成 WebSocket 握手）、`app-server generate-json-schema`。
+
+**没验证**：`mcp login` / `logout`（需要 OAuth 服务器）、`cloud exec` / `status` / `diff` / `apply` 和 `apply`（账号里没有云任务）、从 Git 或远程市场安装插件（需要网络源）、`exec-server forward`、IDE 上下文通信、桌面通知。

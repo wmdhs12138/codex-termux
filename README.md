@@ -44,7 +44,7 @@ codex update
 | 系统钥匙串 | 不可用，凭据存在 `$CODEX_HOME/auth.json` |
 | `daemon update`、守护进程的自动更新器 | 不支持，更新走 `codex update` |
 
-`mcp`、`plugin`、`cloud` 等其余子命令没有逐个验证。完整清单、原因和可以补的办法见 [docs/limitations.md](docs/limitations.md)。
+`mcp`、`plugin`、`resume` / `fork`、`archive` / `delete`、`queue`、`review`、`cloud list` 等其余子命令都逐个验证过可用，验证范围和没验证的部分见 [docs/limitations.md](docs/limitations.md)，那里还有未实现功能的原因和可以补的办法。
 
 ## 使用前请知道
 

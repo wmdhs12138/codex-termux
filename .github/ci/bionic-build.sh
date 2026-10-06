@@ -308,6 +308,12 @@ echo "::group::TUI with the shared background server"
 bash "$ROOT/tests/test_daemon_tui.sh" "$CODEX"
 echo "::endgroup::"
 
+# Subcommands that need no network or account: an MCP server over stdio called through Code
+# Mode, plugins from a local marketplace, the session commands, features, completion.
+echo "::group::Subcommands"
+bash "$ROOT/tests/test_subcommands.sh" "$CODEX"
+echo "::endgroup::"
+
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true
