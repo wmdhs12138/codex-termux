@@ -5,9 +5,13 @@ name: build
 #
 #   resolve -- picks the upstream version and the release tag; decides whether
 #              anything new needs to be released.
+#   tests   -- static checks (shell syntax, patch hygiene) and the offline
+#              installer scenarios; the only job a pull request runs besides resolve.
 #   bionic  -- ARM64 runner + pinned termux-docker. Builds from source with the
 #              patches in patches/, then executes the result in Bionic.
 #   release -- the only job with write permission; publishes the tarball.
+#
+# See docs/ci.md.
 
 on:
   push:
