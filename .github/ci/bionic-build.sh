@@ -19,6 +19,9 @@ echo "::group::Install Termux build dependencies"
 # official repository has 1.99.0, and std needs rustc >= 1.98 for File::lock on
 # Android. Pin the official repository instead of whatever the image picked.
 echo 'deb https://packages.termux.dev/apt/termux-main stable main' > "$PREFIX/etc/apt/sources.list"
+# Without this, every `pkg update/upgrade/install` reruns mirror selection (the image has
+# no chosen_mirrors) and rewrites sources.list with a random mirror, repository.su included.
+export TERMUX_PKG_NO_MIRROR_SELECT=1
 pkg update -y
 # sed, not python: python is not installed yet at this point.
 RUST_MIN="$(sed -n 's/.*"rust_min": *"\([^"]*\)".*/\1/p' versions.json)"
