@@ -1,0 +1,208 @@
+diff --git a/codex-rs/arg0/src/lib.rs b/codex-rs/arg0/src/lib.rs
+index 5bed3b9..b061e00 100644
+--- a/codex-rs/arg0/src/lib.rs
++++ b/codex-rs/arg0/src/lib.rs
+@@ -162,6 +162,8 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
+     // This modifies the environment, which is not thread-safe, so do this
+     // before creating any threads/the Tokio runtime.
+     load_dotenv();
++    #[cfg(target_os = "android")]
++    export_se_process_context();
+ 
+     let (path_entry_guard, updated_path_env_var) = prepare_path_env_var_with_aliases(
+         InstallContext::current(),
+@@ -327,6 +329,55 @@ where
+     }
+ }
+ 
++/// Read by termux-exec, the `execve` hook Termux preloads into every process. When it is unset,
++/// the hook reads `/proc/self/attr/current` with `fopen()` instead. On Android, std spawns
++/// children with fork + exec, and the hook runs in the forked child before the exec: if another
++/// thread held a libc stdio lock at the fork, the child blocks on it forever, keeping copies of
++/// every descriptor the parent had open (the daemon's control socket included).
++#[cfg(target_os = "android")]
++const TERMUX_SE_PROCESS_CONTEXT_ENV_VAR: &str = "TERMUX__SE_PROCESS_CONTEXT";
++
++/// Exports the SELinux context while the process is still single-threaded, so the hook never
++/// takes that path in a child that inherits the environment.
++#[cfg(target_os = "android")]
++fn export_se_process_context() {
++    if std::env::var_os(TERMUX_SE_PROCESS_CONTEXT_ENV_VAR).is_some_and(|value| !value.is_empty()) {
++        return;
++    }
++    let Ok(raw) = std::fs::read("/proc/self/attr/current") else {
++        return;
++    };
++    if let Some(context) = se_process_context(&raw) {
++        // It is safe to call set_var() because our process is single-threaded at
++        // this point in its execution.
++        unsafe { std::env::set_var(TERMUX_SE_PROCESS_CONTEXT_ENV_VAR, context) };
++    }
++}
++
++/// Returns the context if termux-exec would accept it,
++/// `^u:r:[^\n :]+:s0(:c[0-9]+,c[0-9]+(,c[0-9]+,c[0-9]+)?)?$`. It warns on every exec about
++/// any other value, such as the AppArmor label `/proc/self/attr/current` holds in a container.
++#[cfg(any(target_os = "android", test))]
++fn se_process_context(raw: &[u8]) -> Option<&str> {
++    let context = std::str::from_utf8(raw)
++        .ok()?
++        .trim_end_matches(['\0', '\n']);
++    let (domain, level) = context.strip_prefix("u:r:")?.split_once(':')?;
++    let categories = level.strip_prefix("s0")?;
++    let domain_ok = !domain.is_empty() && !domain.contains([' ', '\n']);
++    let categories_ok = categories.is_empty()
++        || categories.strip_prefix(':').is_some_and(|categories| {
++            let categories = categories.split(',').collect::<Vec<_>>();
++            matches!(categories.len(), 2 | 4)
++                && categories.iter().all(|category| {
++                    category.strip_prefix('c').is_some_and(|number| {
++                        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
++                    })
++                })
++        });
++    (domain_ok && categories_ok).then_some(context)
++}
++
+ /// Creates a temporary directory with either:
+ ///
+ /// - UNIX: `apply_patch` symlink to the current executable
+@@ -544,6 +595,7 @@ mod tests {
+     use super::linux_sandbox_exe_path;
+     #[cfg(unix)]
+     use super::run_main_with_arg0_guard;
++    use super::se_process_context;
+     #[cfg(unix)]
+     use anyhow::ensure;
+     use codex_install_context::CodexPackageLayout;
+@@ -812,4 +864,30 @@ mod tests {
+         assert!(!dir.exists());
+         Ok(())
+     }
++
++    #[test]
++    fn se_process_context_accepts_only_what_termux_exec_accepts() {
++        for (raw, expected) in [
++            (
++                &b"u:r:untrusted_app_27:s0:c221,c258,c512,c768\0"[..],
++                Some("u:r:untrusted_app_27:s0:c221,c258,c512,c768"),
++            ),
++            (
++                b"u:r:untrusted_app:s0:c512,c768\n",
++                Some("u:r:untrusted_app:s0:c512,c768"),
++            ),
++            (b"u:r:shell:s0", Some("u:r:shell:s0")),
++            (b"docker-default (enforce)\n", None),
++            (b"unconfined\n", None),
++            (b"", None),
++            (b"u:r::s0", None),
++            (b"u:r:untrusted_app:s1", None),
++            (b"u:r:untrusted_app:s0:c512", None),
++            (b"u:r:untrusted_app:s0:c512,c768,c1", None),
++            (b"u:r:untrusted_app:s0:c512,x768", None),
++            (b"u:r:untrusted app:s0", None),
++        ] {
++            assert_eq!(se_process_context(raw), expected, "{raw:?}");
++        }
++    }
+ }
+diff --git a/codex-rs/protocol/src/shell_environment.rs b/codex-rs/protocol/src/shell_environment.rs
+index e8bdaa4..03ecead 100644
+--- a/codex-rs/protocol/src/shell_environment.rs
++++ b/codex-rs/protocol/src/shell_environment.rs
+@@ -9,6 +9,10 @@ pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_
+ pub const OPENAI_FEDERATION_RULE_ID_ENV_VAR: &str = "OPENAI_FEDERATION_RULE_ID";
+ pub const OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR: &str = "OPENAI_IDENTITY_TOKEN_FILE";
+ pub const OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR: &str = "OPENAI_WORKLOAD_IDENTITY_CONTEXT";
++/// Termux's SELinux context, which codex-arg0 exports at startup. termux-exec reads it in every
++/// child Codex forks, before the exec, and without it falls back to stdio, which can deadlock
++/// there. So it reaches the child whatever the environment policy filters out.
++pub const TERMUX_SE_PROCESS_CONTEXT_ENV_VAR: &str = "TERMUX__SE_PROCESS_CONTEXT";
+ 
+ /// Environment variables that model-reachable child processes must not inherit.
+ pub const NON_INHERITABLE_ENV_VARS: &[&str] = &[
+@@ -95,6 +99,16 @@ pub fn populate_env<I>(
+ where
+     I: IntoIterator<Item = (String, String)>,
+ {
++    #[cfg(target_os = "android")]
++    let (vars, se_process_context) = {
++        let vars = vars.into_iter().collect::<Vec<_>>();
++        let context = vars
++            .iter()
++            .find(|(name, _)| name == TERMUX_SE_PROCESS_CONTEXT_ENV_VAR)
++            .map(|(_, value)| value.clone());
++        (vars, context)
++    };
++
+     // Step 1 - determine the starting set of variables based on the
+     // `inherit` strategy.
+     let mut env_map: HashMap<String, String> = match policy.inherit {
+@@ -152,6 +166,13 @@ where
+         env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+     }
+ 
++    #[cfg(target_os = "android")]
++    if let Some(context) = se_process_context {
++        env_map
++            .entry(TERMUX_SE_PROCESS_CONTEXT_ENV_VAR.to_string())
++            .or_insert(context);
++    }
++
+     // Restricted launch context cannot be restored through user-provided shell
+     // environment overrides.
+     env_map.retain(|name, _| !is_non_inheritable_env_var(name));
+@@ -319,4 +340,40 @@ mod non_windows_tests {
+ 
+         assert_eq!(result, expected);
+     }
++
++    #[cfg(target_os = "android")]
++    #[test]
++    fn termux_se_process_context_survives_every_policy() {
++        let context = "u:r:untrusted_app_27:s0:c221,c258,c512,c768";
++        let vars = make_vars(&[
++            ("PATH", "/usr/bin"),
++            (TERMUX_SE_PROCESS_CONTEXT_ENV_VAR, context),
++        ]);
++        let policies = [
++            ShellEnvironmentPolicy {
++                inherit: ShellEnvironmentPolicyInherit::Core,
++                ..Default::default()
++            },
++            ShellEnvironmentPolicy {
++                inherit: ShellEnvironmentPolicyInherit::None,
++                ..Default::default()
++            },
++            ShellEnvironmentPolicy {
++                exclude: vec![EnvironmentVariablePattern::new_case_insensitive("TERMUX_*")],
++                include_only: vec![EnvironmentVariablePattern::new_case_insensitive("PATH")],
++                ..Default::default()
++            },
++        ];
++
++        for policy in policies {
++            let result = populate_env(vars.clone(), &policy, /*thread_id*/ None);
++            assert_eq!(
++                result
++                    .get(TERMUX_SE_PROCESS_CONTEXT_ENV_VAR)
++                    .map(String::as_str),
++                Some(context),
++                "{policy:?}"
++            );
++        }
++    }
+ }
+diff --git a/codex-rs/rmcp-client/src/utils.rs b/codex-rs/rmcp-client/src/utils.rs
+index dac42ca..18e9c25 100644
+--- a/codex-rs/rmcp-client/src/utils.rs
++++ b/codex-rs/rmcp-client/src/utils.rs
+@@ -172,6 +172,8 @@ pub(crate) const DEFAULT_ENV_VARS: &[&str] = &[
+     "TERM",
+     "TMPDIR",
+     "TZ",
++    #[cfg(target_os = "android")]
++    codex_protocol::shell_environment::TERMUX_SE_PROCESS_CONTEXT_ENV_VAR,
+ ];
+ 
+ #[cfg(windows)]

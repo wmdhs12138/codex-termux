@@ -49,5 +49,6 @@ sha256sum --check --quiet /path/to/codex-termux/overlay/UPSTREAM.sha256
 - Android 没有内核沙箱：doctor 里"restricted fs + network"只是配置，不是强制。`web_search` 在非 full access 时默认是缓存的，补丁 0007 在这里默认改成实时。
 - `CODEX_HOME` 不能放在 `$PREFIX/tmp` 下：Codex 拒绝在临时目录里创建它的辅助二进制。
 - 守护进程的 socket 路径受 `sun_path`（107 字节）限制；Termux 前缀很长，物理路径要留意长度，客户端经 `app-server-control.sock` 这个软链连接。
+- termux-exec 的 `execve` 钩子在 fork 之后、exec 之前用 stdio 读 `/proc/self/attr/current`，多线程进程里会偶发死锁（补丁 0017 用 `TERMUX__SE_PROCESS_CONTEXT` 绕开）。卡死的子进程的特征：线程数 1、`utime` 为 0、`/proc/<pid>/syscall` 第一个数是 98（futex），栈上（`/proc/<pid>/mem`）能找到 `libtermux-exec-ld-preload.so` 的返回地址（libc 自己的帧在栈上找不到，只有一个指向 "Contending for pthread mutex" 的字符串指针）。
 - 在手机上 `cargo check` 偶尔会遇到 `Text file busy`（并行构建时 fork 与写文件的竞争），重跑即可。
 - 手机上没有 `/tmp`（不可写）：临时文件放 `$TMPDIR` 或任务目录。

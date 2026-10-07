@@ -18,7 +18,8 @@
 
 - 0011：socket 目录改到 Termux 前缀下的 `tmp`，并把路径里的摘要截短，保证不超过 `sun_path` 的 107 字节；
 - 0012、0014：进程身份和启动时间改读 `/proc/<pid>/stat`，不依赖 `ps`；
-- 0013：守护进程的「package」是两个符号链接 `~/.codex/packages/app-server-daemon/current → releases/android` 和 `releases/android/bin/codex → 正在运行的 codex`，因此守护进程运行的就是你装的这个二进制，不需要另外安装，也不多占 300 MB。
+- 0013：守护进程的「package」是两个符号链接 `~/.codex/packages/app-server-daemon/current → releases/android` 和 `releases/android/bin/codex → 正在运行的 codex`，因此守护进程运行的就是你装的这个二进制，不需要另外安装，也不多占 300 MB；
+- 0017：启动时导出 `TERMUX__SE_PROCESS_CONTEXT`。没有它，守护进程派生的子进程偶尔会在 exec 之前卡死在 termux-exec 里，并一直占着控制 socket。
 
 `codex update` 会运行 `install.sh`；装入了不同的二进制后，如果守护进程在运行，安装器会执行 `codex app-server daemon restart` 让它换上新版本（`CODEX_TERMUX_SKIP_DAEMON_RESTART=1` 可关闭）。上游的 `daemon update`（用官方安装器更新）和后台自动更新器不支持：官方安装器装的是官方的 Linux 二进制，不能在 Android 上运行。
 
@@ -47,6 +48,7 @@
 - 守护进程沿用**它启动那一刻的环境变量**（上游文档也这么写）：之后在新终端里改的 `PATH`、代理等，不会影响模型在界面里执行的命令，除非重启守护进程。
 - 配置（比如目录信任）会被实时读取，不需要重启。
 - 排障：`packages/app-server-daemon/current` 如果是手工建的真实目录而不是符号链接，链接这一步会报 `Is a directory`，删掉它让 Codex 重建即可。
+- 排障（0017 之前的版本）：`daemon restart` 报 `timed out probing app-server control socket`，同时 `~/.codex/app-server-daemon/daemon.stderr.log` 里是 `control socket is already in use`，说明旧守护进程留下的子进程卡在 exec 之前，占着 socket。它的命令行和守护进程一样，但只有一个线程：用 `for p in $(pgrep -f 'app-server --listen unix://'); do echo "$p $(grep Threads /proc/$p/status)"; done` 找到 `Threads: 1` 的那个，`kill -9` 掉（它继承了守护进程的 SIGTERM 处理函数，普通 `kill` 杀不掉），再 `codex app-server daemon restart`。
 
 ## 远程控制
 

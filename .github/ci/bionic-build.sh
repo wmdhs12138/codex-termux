@@ -318,6 +318,12 @@ echo "::group::Subcommands"
 bash "$ROOT/tests/test_subcommands.sh" "$CODEX"
 echo "::endgroup::"
 
+# termux-exec's SELinux context reaches every child (patch 0017). This host has no SELinux, so
+# here it checks that nothing is exported; on a phone it checks the real value.
+echo "::group::SELinux context for termux-exec"
+bash "$ROOT/tests/test_se_context.sh" "$CODEX"
+echo "::endgroup::"
+
 # Informational: DNS + TLS + HTTP upgrade against the real endpoint. Not
 # asserted, because a datacenter IP may be rate limited or blocked.
 "$CODEX" doctor >work/doctor.txt 2>&1 || true
