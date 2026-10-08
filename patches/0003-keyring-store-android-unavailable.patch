@@ -1,5 +1,5 @@
 diff --git a/codex-rs/keyring-store/src/lib.rs b/codex-rs/keyring-store/src/lib.rs
-index 3b0a1c4..03751d6 100644
+index bd38bc6..5db9beb 100644
 --- a/codex-rs/keyring-store/src/lib.rs
 +++ b/codex-rs/keyring-store/src/lib.rs
 @@ -1,8 +1,10 @@
@@ -12,8 +12,8 @@ index 3b0a1c4..03751d6 100644
 +#[cfg(not(target_os = "android"))]
  use tracing::trace;
  
- #[derive(Debug)]
-@@ -62,6 +64,32 @@ pub trait KeyringStore: Debug + Send + Sync {
+ pub enum CredentialStoreError {
+@@ -74,6 +76,32 @@ pub trait KeyringStore: Debug + Send + Sync {
  #[derive(Debug, Clone, Copy)]
  pub struct DefaultKeyringStore;
  

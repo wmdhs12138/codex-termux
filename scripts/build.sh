@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Build the Bionic AArch64 `codex` from upstream source + patches/.
 #
-#   VERSION=0.160.0 scripts/build.sh
+#   VERSION=0.161.0 scripts/build.sh
 #
 # Runs on a Termux device or inside termux-docker (CI). Output: dist/.
 set -Eeuo pipefail

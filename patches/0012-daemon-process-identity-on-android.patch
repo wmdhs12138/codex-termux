@@ -1,8 +1,8 @@
 diff --git a/codex-rs/app-server-daemon/src/backend/pid.rs b/codex-rs/app-server-daemon/src/backend/pid.rs
-index 22e34d9..e68e878 100644
+index fce3064..2161dcc 100644
 --- a/codex-rs/app-server-daemon/src/backend/pid.rs
 +++ b/codex-rs/app-server-daemon/src/backend/pid.rs
-@@ -578,7 +578,7 @@ async fn process_matches_record(record: &PidRecord) -> Result<bool> {
+@@ -592,7 +592,7 @@ async fn process_matches_record(record: &PidRecord) -> Result<bool> {
      }
  
      let details = async {
@@ -73,12 +73,12 @@ index ea631a3..da98bf9 100644
      // comm (field 2) can contain spaces and closing parentheses. The final ')'
      // terminates it; splitting the whole line on whitespace miscounts fields.
 diff --git a/codex-rs/app-server-daemon/src/backend/pid_start.rs b/codex-rs/app-server-daemon/src/backend/pid_start.rs
-index 1c286a8..a227f37 100644
+index 2c091ab..8933978 100644
 --- a/codex-rs/app-server-daemon/src/backend/pid_start.rs
 +++ b/codex-rs/app-server-daemon/src/backend/pid_start.rs
-@@ -263,12 +263,12 @@ impl PidBackend {
-             .context("spawned app-server process has no pid")?;
-         let record = match async {
+@@ -240,12 +240,12 @@ impl PidBackend {
+         let started = std::time::Instant::now();
+         let record = async {
              let process_start_time = read_process_start_time(pid).await?;
 -            #[cfg(any(target_os = "linux", target_os = "macos"))]
 +            #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
@@ -92,7 +92,7 @@ index 1c286a8..a227f37 100644
              anyhow::Ok(PidRecord {
                  pid,
 diff --git a/codex-rs/app-server-daemon/src/update_loop.rs b/codex-rs/app-server-daemon/src/update_loop.rs
-index 8f55126..d365d2d 100644
+index 499acd1..a866b95 100644
 --- a/codex-rs/app-server-daemon/src/update_loop.rs
 +++ b/codex-rs/app-server-daemon/src/update_loop.rs
 @@ -32,7 +32,7 @@ use crate::RestartMode;

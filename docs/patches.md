@@ -1,17 +1,16 @@
 # 补丁与 overlay
 
-本项目不拷贝 Codex 源码：构建时按 tag 拉取上游 `openai/codex`，依次打上 [`patches/`](../patches) 里的补丁，再用 [`overlay/`](../overlay) 覆盖 Code Mode 的 JS 引擎层。补丁是对上游文件的普通 `git diff`，针对上游 `rust-v0.160.0`（`rust-v0.160.1` 已核对：全部补丁都能干净打上，overlay 哈希一致）。
+本项目不拷贝 Codex 源码：构建时按 tag 拉取上游 `openai/codex`，依次打上 [`patches/`](../patches) 里的补丁，再用 [`overlay/`](../overlay) 覆盖 Code Mode 的 JS 引擎层。补丁是对上游文件的普通 `git diff`，针对上游 `rust-v0.161.0`。
 
 补丁采用精确匹配：上游结构变化导致补丁不再适用时，构建会直接失败，而不是产出未验证的文件。
 
-编号说明：`0004`（Android 上默认关闭共享后台服务）已在补丁 0013 解决了它的前提之后撤掉，编号不再复用。
+编号说明：`0004`（Android 上默认关闭共享后台服务）已在补丁 0013 解决了它的前提之后撤掉；`0002`（给 `codex-chatgpt` 加 `recursion_limit = "256"`）在上游 `rust-v0.161.0` 自己加上了同样的一行之后撤掉。编号不再复用。
 
 ## 补丁
 
 | 补丁 | 作用 |
 | --- | --- |
 | `0001-code-mode-protocol-honor-PROTOC.patch` | `protoc-bin-vendored` 没有 Android 版 protoc，改为优先读取 `PROTOC` 环境变量（Termux：`pkg install protobuf`）。 |
-| `0002-chatgpt-raise-recursion-limit.patch` | 上游钉的是 rustc 1.95，用 1.99 编译时 `codex-chatgpt` 的类型求解会超出默认深度，沿用上游其他 crate 的 `recursion_limit = "256"`。 |
 | `0003-keyring-store-android-unavailable.patch` | Android 上 `keyring` 没有后端，会退化成"保存成功但不落盘"的内存 mock，导致 `auto` 凭据模式丢失登录。改为明确报告不可用，让 `auto` 回落到 `auth.json`。 |
 | `0005-code-mode-only-falls-back-to-direct-tools.patch` | 目录里大多数模型是 `code_mode_only`，shell 只存在于 Code Mode 的 JS `exec` 中。Android 没有 V8、不构建 `codex-code-mode-host`，上游此时给这类模型的工具列表是空的，模型一个命令也跑不了。补丁让它们回退到直连工具（`exec_command`、`apply_patch` 等），上游只给 `code_mode` 留了这个回退。 |
 | `0006-apply-patch-auto-approve-without-platform-sandbox.patch` | 上游只在存在平台沙箱时才自动批准"路径在可写范围内"的补丁（防止硬链接绕过）。Android 没有任何平台沙箱，审批策略为 `never` 或 `granular` 时每个补丁都会被拒绝，错误信息还写成"writing outside of the project"，连工作目录里的相对路径也不例外，`apply_patch` 因此完全不可用。补丁让 Android 上仍按可写路径检查放行。 |
