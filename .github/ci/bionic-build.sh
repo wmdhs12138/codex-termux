@@ -312,6 +312,12 @@ echo "::group::TUI with the shared background server"
 bash "$ROOT/tests/test_daemon_tui.sh" "$CODEX"
 echo "::endgroup::"
 
+# The update prompt offers a re-cut of the running version, told apart by binary hash (patch
+# 0018); the cached update check is written by hand, plus one real check against github.com.
+echo "::group::Update prompt for re-cut releases"
+bash "$ROOT/tests/test_update_prompt.sh" "$CODEX"
+echo "::endgroup::"
+
 # Subcommands that need no network or account: an MCP server over stdio called through Code
 # Mode, plugins from a local marketplace, the session commands, features, completion.
 echo "::group::Subcommands"

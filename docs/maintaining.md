@@ -36,7 +36,7 @@ sha256sum --check --quiet /path/to/codex-termux/overlay/UPSTREAM.sha256
 
 - tag 是 `vX.Y.Z`；同一个上游版本因为补丁变化重新发布，tag 是 `vX.Y.Z-rN`。release 任务只创建、从不修改已有的 Release；仓库开启不可变发布后由 GitHub 强制，被撤回的版本名也永远被占用，release 任务遇到这种情况会自动改用下一个 `-rN`。
 - tag 用 `--target` 钉在 CI 构建它的那个提交上；发布说明列出相对上一个 Release 的补丁和工具链变更（不含 `docs/`、`tests/` 和 Markdown）。
-- `-rN` 只有 `codex update` 会装上（它运行安装器，安装器按二进制哈希判断）；应用内的更新提示只看上游版本号，不会提示同一版本的重新发布。
+- `-rN` 不改版本号，所以安装器和启动时的更新提示都按二进制哈希判断（提示见补丁 0018；没有 0018 的旧版本只能靠手动 `codex update` 装上）。
 - 只有 `bionic` 全绿，`release` 才会发布；只有最高的 Codex 版本会成为 Latest，所以重新发布旧版本不会让安装器回退。**所以在有发布中的构建时，别往 `main` 推会触发完整构建的提交**；已经在跑的构建要先 `gh run cancel`，等它真的变成 cancelled 再重发。
 - `codex update` 运行的是 `main` 上的 `install.sh`，所以只改安装器不需要发版，推上去就生效。
 

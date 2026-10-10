@@ -250,8 +250,8 @@ jobs:
               case "$1" in
                 *-r*) echo
                       echo "Re-release ${1##*-r} of Codex $VERSION: same upstream code, new patches or toolchain." \
-                           "\`codex update\` installs it (the installer compares binary hashes); the in-app" \
-                           "update prompt only reacts to new upstream versions." ;;
+                           "\`codex update\` installs it: the installer compares binary hashes, and so does the" \
+                           "update prompt of builds that carry patch 0018." ;;
               esac
               cat <<EOF
 

@@ -24,8 +24,8 @@
 | `0014-daemon-start-time-from-proc-on-android.patch` | 记录守护进程的启动时间时上游调用 `ps -o lstart`，而 Termux 默认没有 procps（系统自带 toybox 的 `ps` 没有 `lstart`）。Android 上改读 `/proc/<pid>/stat`。 |
 | `0015-remote-control-server-name-on-android.patch` | 远程控制向 ChatGPT 上报、并显示在设备列表里的名字来自 `gethostname()`，Android 上永远是 `localhost`，分不清是哪台设备。补丁改成 `<品牌> · Termux`（读系统属性 `ro.product.brand`，没有则用 `ro.product.manufacturer`），例如 `vivo · Termux`；读不到属性时仍用主机名。已存在的登记会在下次连接时改名。 |
 | `0016-code-mode-runtime-tz-database.patch` | 给 `code-mode-runtime` 加 `jiff` 依赖（版本固定在上游锁文件里已有的 0.2.23，并打开 `tzdb-bundle-always` 把 tzdb 编进二进制），为 overlay 里的 `Intl.DateTimeFormat` 提供 IANA 时区数据：系统时区读 Android 的 `persist.sys.timezone`，其他时区读编进二进制的 tzdb 副本（同 V8 用自带 ICU 的数据；Android 系统的 tzdata 可能很旧，例如 AOSP 9 的还有 2019 年已废止的巴西夏令时）。 |
-
 | `0017-termux-exec-se-process-context-on-android.patch` | Termux 给每个进程预加载 termux-exec，它在每次 `execve` 时要知道进程的 SELinux 上下文：先读 `TERMUX__SE_PROCESS_CONTEXT`，没有就用 `fopen()` 读 `/proc/self/attr/current`。Rust 在 Android 上用 fork + exec 启动子进程，这个钩子运行在 fork 出来、还没 exec 的子进程里；fork 那一刻如果别的线程正持有 libc 的 stdio 锁，子进程就永远卡住，同时攥着父进程打开的所有 fd。守护进程曾因此留下一个卡死的子进程占着控制 socket，`daemon restart` 起不来新服务。补丁让 codex 在启动时（还是单线程的时候）把上下文写进这个变量（只写 termux-exec 认可的格式，否则它每次 exec 都会警告），并让它穿过 `shell_environment_policy` 的过滤和 MCP 服务器的环境白名单，保证每个子进程都拿得到。 |
+| `0018-update-prompt-offers-recuts-on-android.patch` | 同一上游版本因补丁变化重新发布为 `vX.Y.Z-rN` 时版本号不变，0009 之后的启动更新检查只比较版本，所以从不提示，只有手动 `codex update`（安装器按二进制哈希判断）才会装上。补丁新增 `tui/src/termux_build.rs`：后台检查（每 20 小时一次）在最新 Release 正是当前版本时，把它的 `binary_sha256`、`host_sha256` 和正在运行的 `codex`、`codex-code-mode-host` 的大小、修改时间、SHA-256 记到 `~/.codex/termux-build.json`；启动时只 `stat` 这两个文件，构建不同就提示 `X.Y.Z → X.Y.Z (new build <哈希前 12 位>)`。提示带上构建哈希，「不再提醒」只忽略这一次构建；二进制在检查之后被替换（例如刚运行过 `codex update`）时不拿旧哈希比较，而是立刻重新检查。测试：`tests/test_update_prompt.sh`。 |
 
 ## Code Mode 的 JS 引擎：overlay
 

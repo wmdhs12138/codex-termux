@@ -1,0 +1,356 @@
+diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
+index dc0fbd0..a437050 100644
+--- a/codex-rs/tui/src/lib.rs
++++ b/codex-rs/tui/src/lib.rs
+@@ -246,6 +246,7 @@ pub use update_action::DaemonUpdateSource;
+ pub use update_action::UpdateAction;
+ #[cfg(not(debug_assertions))]
+ pub use update_action::get_update_action;
++mod termux_build;
+ mod update_prompt;
+ mod update_versions;
+ mod updates;
+diff --git a/codex-rs/tui/src/termux_build.rs b/codex-rs/tui/src/termux_build.rs
+new file mode 100644
+index 0000000..6453a20
+--- /dev/null
++++ b/codex-rs/tui/src/termux_build.rs
+@@ -0,0 +1,276 @@
++//! codex-termux: offer a re-cut release (`vX.Y.Z-rN`) of the running version.
++//!
++//! The update check compares versions, and a re-cut keeps the upstream version, so it was never
++//! offered; only `codex update`, whose installer compares binary hashes, picked it up. This keeps
++//! the latest release's hashes (from its build-manifest.json) next to version.json, together with
++//! the hashes of the running `codex` and `codex-code-mode-host` and their size and mtime.
++//!
++//! Hashing happens only in the background check, and only when the latest release is the running
++//! version. At startup the binaries are only stat'ed: one replaced since the check, for example by
++//! `codex update`, is not compared against stale hashes; the check runs again instead.
++#![cfg(all(target_os = "android", any(not(debug_assertions), test)))]
++
++use crate::update_versions::extract_version_from_latest_tag;
++use crate::version::CODEX_CLI_VERSION;
++use serde::Deserialize;
++use serde::Serialize;
++use sha2::Digest;
++use sha2::Sha256;
++use std::io::Read;
++use std::path::Path;
++use std::path::PathBuf;
++use std::time::UNIX_EPOCH;
++
++const STATE_FILENAME: &str = "termux-build.json";
++/// Codex runs its Code Mode engine from this file next to itself; the installer ships both.
++const HOST_FILENAME: &str = "codex-code-mode-host";
++
++/// The part of a release's build-manifest.json this needs.
++#[derive(Deserialize, Debug, Clone)]
++struct ReleaseBuild {
++    codex: String,
++    binary_sha256: Option<String>,
++    #[serde(default)]
++    host_sha256: Option<String>,
++}
++
++/// One running binary as it was when it was hashed.
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
++struct FileState {
++    size: u64,
++    modified_ns: u64,
++    sha256: String,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
++struct State {
++    /// The latest release: its version and binaries.
++    version: String,
++    binary_sha256: String,
++    host_sha256: Option<String>,
++    /// The running binaries when the check ran; no `host` if there was none.
++    codex: FileState,
++    host: Option<FileState>,
++}
++
++/// Background part of the update check: record the latest release's build and, when it is the
++/// running version, hash the running binaries. Any other version needs no hashes.
++pub(crate) async fn record(
++    client_pool: &codex_http_client::RouteAwareClientPool,
++    manifest_url: &str,
++    version_file: &Path,
++) -> anyhow::Result<()> {
++    let path = state_path(version_file);
++    let release = client_pool
++        .get(manifest_url)
++        .headers(codex_login::default_client::default_headers())
++        .send()
++        .await?
++        .error_for_status()?
++        .json::<ReleaseBuild>()
++        .await?;
++    let version = extract_version_from_latest_tag(&release.codex)?;
++    let Some(binary_sha256) = release
++        .binary_sha256
++        .filter(|_| version == CODEX_CLI_VERSION)
++    else {
++        match tokio::fs::remove_file(&path).await {
++            Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err.into()),
++            _ => return Ok(()),
++        }
++    };
++    let host_sha256 = release.host_sha256;
++    let state = tokio::task::spawn_blocking(move || -> std::io::Result<State> {
++        let (codex, host) = running_paths()?;
++        Ok(State {
++            version,
++            binary_sha256,
++            host_sha256,
++            codex: hash(&codex)?,
++            host: host.exists().then(|| hash(&host)).transpose()?,
++        })
++    })
++    .await??;
++    tokio::fs::write(&path, format!("{}\n", serde_json::to_string(&state)?)).await?;
++    Ok(())
++}
++
++/// At startup: run the update check now, although its result is recent, because the running
++/// binaries changed since it hashed them.
++pub(crate) fn needs_check(version_file: &Path) -> bool {
++    let Some(state) = read_state(version_file) else {
++        return false;
++    };
++    match running_paths() {
++        Ok((codex, host)) => !unchanged(&state, &codex, &host),
++        Err(_) => false,
++    }
++}
++
++/// At startup: what to offer when the latest release is a different build of the running
++/// version. The label names the build, so dismissing it does not dismiss the next re-cut.
++pub(crate) fn rebuilt_version(version_file: &Path, latest_version: &str) -> Option<String> {
++    if latest_version != CODEX_CLI_VERSION {
++        return None;
++    }
++    let state = read_state(version_file)?;
++    let (codex, host) = running_paths().ok()?;
++    (state.version == latest_version && unchanged(&state, &codex, &host) && differs(&state))
++        .then(|| label(latest_version, &state.binary_sha256))
++}
++
++fn label(version: &str, sha256: &str) -> String {
++    format!("{version} (new build {})", &sha256[..sha256.len().min(12)])
++}
++
++/// Whether the latest release is another build than the running one, as install.sh decides it.
++fn differs(state: &State) -> bool {
++    state.codex.sha256 != state.binary_sha256
++        || state
++            .host_sha256
++            .as_ref()
++            .is_some_and(|want| state.host.as_ref().map(|host| &host.sha256) != Some(want))
++}
++
++/// Whether the running binaries are still the ones `state` hashed.
++fn unchanged(state: &State, codex: &Path, host: &Path) -> bool {
++    let same = |path: &Path, recorded: Option<&FileState>| match (identity(path).ok(), recorded) {
++        (Some((size, modified_ns)), Some(recorded)) => {
++            recorded.size == size && recorded.modified_ns == modified_ns
++        }
++        (None, None) => true,
++        _ => false,
++    };
++    same(codex, Some(&state.codex)) && same(host, state.host.as_ref())
++}
++
++fn state_path(version_file: &Path) -> PathBuf {
++    version_file.with_file_name(STATE_FILENAME)
++}
++
++fn read_state(version_file: &Path) -> Option<State> {
++    let contents = std::fs::read_to_string(state_path(version_file)).ok()?;
++    serde_json::from_str(&contents).ok()
++}
++
++fn running_paths() -> std::io::Result<(PathBuf, PathBuf)> {
++    let codex = std::env::current_exe()?;
++    let host = codex.with_file_name(HOST_FILENAME);
++    Ok((codex, host))
++}
++
++/// Size and mtime: the part of a FileState that is cheap to read.
++fn identity(path: &Path) -> std::io::Result<(u64, u64)> {
++    let meta = std::fs::metadata(path)?;
++    let modified = meta
++        .modified()?
++        .duration_since(UNIX_EPOCH)
++        .map_err(std::io::Error::other)?;
++    Ok((
++        meta.len(),
++        u64::try_from(modified.as_nanos()).unwrap_or(u64::MAX),
++    ))
++}
++
++fn hash(path: &Path) -> std::io::Result<FileState> {
++    let (size, modified_ns) = identity(path)?;
++    let mut file = std::fs::File::open(path)?;
++    let mut hasher = Sha256::new();
++    let mut buf = vec![0u8; 1 << 20];
++    loop {
++        let n = file.read(&mut buf)?;
++        if n == 0 {
++            break;
++        }
++        hasher.update(&buf[..n]);
++    }
++    Ok(FileState {
++        size,
++        modified_ns,
++        sha256: format!("{:x}", hasher.finalize()),
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use pretty_assertions::assert_eq;
++
++    fn state(dir: &Path, binary_sha256: &str, host_sha256: Option<&str>) -> State {
++        let codex = dir.join("codex");
++        let host = dir.join(HOST_FILENAME);
++        State {
++            version: "1.2.3".to_string(),
++            binary_sha256: binary_sha256.to_string(),
++            host_sha256: host_sha256.map(str::to_string),
++            codex: hash(&codex).expect("hash codex"),
++            host: host.exists().then(|| hash(&host).expect("hash host")),
++        }
++    }
++
++    fn binaries(dir: &Path, with_host: bool) -> (PathBuf, PathBuf) {
++        let codex = dir.join("codex");
++        let host = dir.join(HOST_FILENAME);
++        std::fs::write(&codex, b"codex").expect("write codex");
++        if with_host {
++            std::fs::write(&host, b"host").expect("write host");
++        }
++        (codex, host)
++    }
++
++    const OTHER_SHA: &str = "4e6a7d6f2b0d11a7e33e4a1a5d4ba5a3a3dd9a9e3b1ba0f9e0bd37f8b7b04f1c";
++
++    #[test]
++    fn same_build_does_not_differ() {
++        let dir = tempfile::tempdir().expect("tempdir");
++        binaries(dir.path(), true);
++        let mut s = state(dir.path(), "", None);
++        s.binary_sha256 = s.codex.sha256.clone();
++        s.host_sha256 = s.host.as_ref().map(|host| host.sha256.clone());
++        assert!(!differs(&s));
++    }
++
++    #[test]
++    fn another_codex_or_host_differs() {
++        let dir = tempfile::tempdir().expect("tempdir");
++        binaries(dir.path(), true);
++        let s = state(dir.path(), OTHER_SHA, None);
++        assert!(differs(&s));
++        let mut s = state(dir.path(), "", Some("other"));
++        s.binary_sha256 = s.codex.sha256.clone();
++        assert!(differs(&s));
++    }
++
++    #[test]
++    fn a_missing_host_differs_only_when_the_release_has_one() {
++        let dir = tempfile::tempdir().expect("tempdir");
++        binaries(dir.path(), false);
++        let mut s = state(dir.path(), "", None);
++        s.binary_sha256 = s.codex.sha256.clone();
++        assert!(!differs(&s));
++        s.host_sha256 = Some("host".to_string());
++        assert!(differs(&s));
++    }
++
++    #[test]
++    fn replaced_binaries_are_noticed() {
++        let dir = tempfile::tempdir().expect("tempdir");
++        let (codex, host) = binaries(dir.path(), true);
++        let s = state(dir.path(), OTHER_SHA, None);
++        assert!(unchanged(&s, &codex, &host));
++        std::fs::write(&codex, b"a longer codex").expect("rewrite codex");
++        assert!(!unchanged(&s, &codex, &host));
++
++        let dir = tempfile::tempdir().expect("tempdir");
++        let (codex, host) = binaries(dir.path(), false);
++        let s = state(dir.path(), OTHER_SHA, None);
++        assert!(unchanged(&s, &codex, &host));
++        std::fs::write(&host, b"host").expect("add host");
++        assert!(!unchanged(&s, &codex, &host));
++    }
++
++    #[test]
++    fn label_names_the_build() {
++        assert_eq!(label("1.2.3", OTHER_SHA), "1.2.3 (new build 4e6a7d6f2b0d)");
++    }
++}
+diff --git a/codex-rs/tui/src/updates.rs b/codex-rs/tui/src/updates.rs
+index e9d85dd..bfa8ebb 100644
+--- a/codex-rs/tui/src/updates.rs
++++ b/codex-rs/tui/src/updates.rs
+@@ -36,7 +36,8 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
+     if match &info {
+         None => true,
+         Some(info) => info.last_checked_at < Utc::now() - Duration::hours(20),
+-    } {
++    } || build_changed_since_check(&version_file)
++    {
+         let http_client_factory = config.http_client_factory();
+         // Refresh the cached latest version in the background so TUI startup
+         // isn’t blocked by a network call. The UI reads the previously cached
+@@ -52,11 +53,33 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
+         if is_newer(&info.latest_version, CODEX_CLI_VERSION).unwrap_or(false) {
+             Some(info.latest_version)
+         } else {
+-            None
++            rebuilt_version(config, &info.latest_version)
+         }
+     })
+ }
+ 
++// codex-termux: a re-cut (vX.Y.Z-rN) keeps the version, so it is told apart by binary hash.
++// See termux_build.rs.
++#[cfg(target_os = "android")]
++fn build_changed_since_check(version_file: &Path) -> bool {
++    crate::termux_build::needs_check(version_file)
++}
++
++#[cfg(not(target_os = "android"))]
++fn build_changed_since_check(_version_file: &Path) -> bool {
++    false
++}
++
++#[cfg(target_os = "android")]
++fn rebuilt_version(config: &Config, latest_version: &str) -> Option<String> {
++    crate::termux_build::rebuilt_version(&version_filepath(config), latest_version)
++}
++
++#[cfg(not(target_os = "android"))]
++fn rebuilt_version(_config: &Config, _latest_version: &str) -> Option<String> {
++    None
++}
++
+ // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
+ const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
+ // codex-termux reads the latest release's build-manifest.json instead of the GitHub API: the
+@@ -135,6 +158,12 @@ async fn check_for_update(
+         tokio::fs::create_dir_all(parent).await?;
+     }
+     tokio::fs::write(version_file, json_line).await?;
++    #[cfg(target_os = "android")]
++    if let Err(err) =
++        crate::termux_build::record(&client_pool, LATEST_RELEASE_URL, version_file).await
++    {
++        tracing::warn!("Failed to check the latest codex-termux build: {err}");
++    }
+     Ok(())
+ }
+ 
