@@ -55,18 +55,21 @@ with open(os.path.join(home, "termux-build.json"), "w") as f:
 PY
 }
 
-# run_tui <name>: the TUI on a pty for 12 s; its screen text in $W/<name>/tui.txt.
+# run_tui <name> <screen> [--linger S]: the TUI on a pty (tests/tui_capture.py answers the
+# terminal queries it waits for) until <screen> is drawn: the update prompt, or onboarding
+# ("Welcome"), which comes after it. $W/<name>/tui.txt is what it drew, whitespace removed.
 # Not under $PREFIX/tmp: Codex refuses to create its helper binaries in a temp dir.
 run_tui() {
-  export CODEX_HOME="$W/$1/home"
+  local name="$1" screen="$2"; shift 2
+  export CODEX_HOME="$W/$name/home"
   mkdir -p "$CODEX_HOME"
-  set +e
-  timeout -s KILL 12 script -qfec "$CODEX" "$W/$1/tui.raw" </dev/null >/dev/null 2>&1
-  set -e
-  strings -n 4 "$W/$1/tui.raw" > "$W/$1/tui.txt"
-  grep -q '?1049h' "$W/$1/tui.txt" || fail "$1: the TUI never reached its first screen"
+  python3 "$ROOT/tests/tui_capture.py" 30 "$W/$name/tui.txt" --until "$screen" "$@" -- "$CODEX"
+  grep -qF "${screen// /}" "$W/$name/tui.txt" \
+    || fail "$name: never reached '$screen'; it drew: $(head -c 600 "$W/$name/tui.txt")"
 }
-prompted() { grep -q 'Update now (runs' "$W/$1/tui.txt"; }
+PROMPT="Update now (runs"
+prompted() { grep -qF "${PROMPT// /}" "$W/$1/tui.txt"; }
+offers() { grep -qF "(newbuild${2:0:12})" "$W/$1/tui.txt"; }
 
 CODEX_SHA="$(sha256sum "$CODEX" | cut -d' ' -f1)"
 OTHER="$(printf 'f%.0s' $(seq 64))"
@@ -74,33 +77,32 @@ echo "codex $VERSION $CODEX_SHA"
 
 echo "== another build of the running version is offered"
 cache recut "$OTHER"
-run_tui recut
-prompted recut || fail "recut: no update prompt"
-grep -q "$VERSION (new build ${OTHER:0:12})" "$W/recut/tui.txt" || fail "recut: the prompt does not name the new build"
+run_tui recut "$PROMPT"
+offers recut "$OTHER" || fail "recut: the prompt does not name the new build"
 
 echo "== the running build is not"
 cache same "$CODEX_SHA"
-run_tui same
+run_tui same Welcome
 ! prompted same || fail "same: prompted for the build that is running"
+! offers same "$CODEX_SHA" || fail "same: offered the build that is running"
 
 echo "== a binary replaced since the check is not compared against stale hashes"
 cache stale "$OTHER" stale
-run_tui stale
+run_tui stale Welcome
 ! prompted stale || fail "stale: prompted from hashes of a binary that is no longer running"
 
 echo "== dismissing a build dismisses only that build"
 cache dismissed "$OTHER" "" "$VERSION (new build ${OTHER:0:12})"
-run_tui dismissed
+run_tui dismissed Welcome
 ! prompted dismissed || fail "dismissed: prompted for a dismissed build"
 NEXT="$(printf 'e%.0s' $(seq 64))"
 cache next "$NEXT" "" "$VERSION (new build ${OTHER:0:12})"
-run_tui next
-prompted next || fail "next: the following re-cut was dismissed too"
-grep -q "$VERSION (new build ${NEXT:0:12})" "$W/next/tui.txt" || fail "next: the prompt does not name the new build"
+run_tui next "$PROMPT"
+offers next "$NEXT" || fail "next: the prompt does not name the new build"
 
 echo "== a check from scratch (needs github.com; reports only when nothing was recorded)"
-run_tui fresh
-sleep 3
+# Onboarding shows up at once; the check runs beside it, so give it a few seconds.
+run_tui fresh Welcome --linger 10
 if [ -f "$CODEX_HOME/termux-build.json" ]; then
   python3 - "$CODEX_HOME" "$CODEX_SHA" "$VERSION" <<'PY' || fail "fresh: termux-build.json does not describe the running codex"
 import json, os, sys

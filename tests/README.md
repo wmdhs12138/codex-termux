@@ -10,7 +10,8 @@
 | `test_daemon_session.sh <codex>` | 一个客户端经守护进程的控制 socket 跑完整的 Code Mode 会话，结果交给 `check_code_mode.py` 检查。 |
 | `test_daemon_tui.sh <codex>` | 真 TUI 在伪终端里用默认设置自动启动并连上守护进程；再测 `--no-daemon` 和 `features.daemon_auto_start=false` 两种关闭方式。 |
 | `test_subcommands.sh <codex>` | 不需要网络和账号的子命令：一个 stdio MCP 服务器（`mcp_echo.py`）被模型经 Code Mode 调用，`plugin` 用本地市场走完添加、安装、列表、卸载，`exec resume`、`archive` / `unarchive` / `delete`、`migrate-rollouts`、`features`、`completion`。 |
-| `test_update_prompt.sh <codex>` | 补丁 0018：手写更新检查的缓存（`version.json` 和按真实二进制生成的 `termux-build.json`），在伪终端里启动 TUI：同版本的另一个构建会弹出提示并写明构建哈希；正在运行的构建不提示；检查之后二进制被替换时不拿旧哈希提示；「不再提醒」只忽略那一个构建。再对 github.com 做一次真实检查：最新 Release 就是当前版本时，必须记录下正在运行的二进制（没有网络时只报告）。 |
+| `test_update_prompt.sh <codex>` | 补丁 0018：手写更新检查的缓存（`version.json` 和按真实二进制生成的 `termux-build.json`），用 `tui_capture.py` 在伪终端里启动 TUI，等到画出更新提示或之后的登录引导：同版本的另一个构建会弹出提示并写明构建哈希；正在运行的构建不提示；检查之后二进制被替换时不拿旧哈希提示；「不再提醒」只忽略那一个构建。再对 github.com 做一次真实检查：最新 Release 就是当前版本时，必须记录下正在运行的二进制（没有网络时只报告）。 |
+| `tui_capture.py` | 在伪终端里运行 TUI 并回答它等待的终端查询（同 `scripts/bench-startup.py`），把画出的内容去掉转义序列和空白后存成可 grep 的文本：ratatui 跳过已经是空白的格子而不写空格，所以只能按去掉空白的文字匹配。没有终端回答查询时 TUI 停在第一屏之前，`script </dev/null` 看不到任何界面文字。 |
 | `test_se_context.sh <codex>` | 补丁 0017：在 `shell_environment_policy.inherit = "core"` 下模型执行的命令、MCP 服务器（环境是白名单）和守护进程都拿到 `TERMUX__SE_PROCESS_CONTEXT`，值与 termux-exec 自己的校验规则一致；没有 SELinux 的环境（CI 的容器）里则什么都不导出。 |
 | `daemon_session.py` | 上面会话测试用的最小客户端：标准库实现的 WebSocket over UDS + JSON-RPC（`initialize`、`thread/start`、`turn/start`，等到 `turn/completed`）。 |
 | `mock_responses.py` | 假的 OpenAI Responses API：记录每个请求到 `request-N.json`，并按脚本回答，让 `codex exec` 和守护进程不用网络和账号就能被测试。 |
