@@ -6,11 +6,12 @@
 
 ```text
 resolve ── 决定上游版本和发布 tag，判断有没有新东西要发
-tests ──── 静态检查和安装器的离线测试（ubuntu-latest，很快）
+tests ──── 静态检查、安装器和发布逻辑的离线测试（ubuntu-latest，很快）
 bionic ─── ubuntu-24.04-arm + 固定的 termux-docker 镜像：
    │       安装依赖 → 拉取上游 tag → 打补丁和 overlay → cargo build --release
    │       → 上游 code-mode 运行时测试对 QuickJS 运行 → 在 Bionic 里真实执行（见下）
-release ── 唯一有写权限的任务：发布 tarball、SHA-256 和 build-manifest.json
+release ── 唯一有写权限的任务：发布 tarball、SHA-256 和 build-manifest.json；
+           tag 钉在构建的提交上，只有最高版本成为 Latest，说明里列出变更
 ```
 
 | 触发 | 做什么 |
@@ -18,7 +19,7 @@ release ── 唯一有写权限的任务：发布 tarball、SHA-256 和 build-
 | 推送到 `main` | 完整构建和测试；版本已发布过就不再发布 |
 | 每天 03:00 UTC | 检查上游最新稳定版；只有新版本才构建，通过验收后自动发布 |
 | 手动运行 | 构建指定版本；勾选 `recut` 在补丁变化后重新发布同一版本（`vX.Y.Z-rN`） |
-| PR | 只跑 `resolve` 和 `tests`（静态检查和安装器测试） |
+| PR | 只跑 `resolve` 和 `tests`（静态检查、安装器和发布逻辑的测试） |
 
 提交信息里带 `[skip ci]` 可以避免推送触发完整构建；之后用 `gh workflow run build.yml -f version=latest -f recut=true` 手动发布。
 

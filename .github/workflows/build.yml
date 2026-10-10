@@ -5,8 +5,9 @@ name: build
 #
 #   resolve -- picks the upstream version and the release tag; decides whether
 #              anything new needs to be released.
-#   tests   -- static checks (shell syntax, patch hygiene) and the offline
-#              installer scenarios; the only job a pull request runs besides resolve.
+#   tests   -- static checks (shell syntax, patch hygiene), the offline installer
+#              scenarios and the release logic; the only job a pull request runs
+#              besides resolve.
 #   bionic  -- ARM64 runner + pinned termux-docker. Builds from source with the
 #              patches in patches/, then executes the result in Bionic.
 #   release -- the only job with write permission; publishes the tarball.
@@ -104,6 +105,9 @@ jobs:
           persist-credentials: false
       - name: Installer scenarios (offline)
         run: bash tests/test_install.sh
+
+      - name: Release logic (offline)
+        run: python3 -m unittest -v tests/test_ci.py
 
       - name: Shell syntax and patch hygiene
         run: |
@@ -211,23 +215,82 @@ jobs:
       - name: Publish release
         run: |
           set -euo pipefail
+          W="$GITHUB_WORKSPACE"
           # The artifact holds dist/ and work/ paths, so download-artifact keeps the
           # dist/ directory; look there.
-          W="$GITHUB_WORKSPACE"
-          cd "$W/out/dist"
-          sha256sum -c codex-termux-aarch64.tar.gz.sha256
-          cat > "$W/notes.md" <<EOF
-          Codex $VERSION built for Termux (Android AArch64, Bionic libc, no proot).
+          D="out/dist"
+          ASSETS="$D/codex-termux-aarch64.tar.gz $D/codex-termux-aarch64.tar.gz.sha256 $D/build-manifest.json"
+          (cd "$D" && sha256sum -c codex-termux-aarch64.tar.gz.sha256)
+
+          # Patch and toolchain changes since the previous release, for the notes:
+          # the highest version tag this commit contains. Not `git describe`, which
+          # picks arbitrarily when two releases share a commit.
+          PREV="$(git tag -l 'v*' --merged "$GITHUB_SHA" | grep -vxF "$TAG" | sort -V | tail -1 || true)"
+          if [ -n "$PREV" ]; then
+            git log --oneline --no-decorate "$PREV..$GITHUB_SHA" -- . \
+              ':(exclude)docs' ':(exclude)tests' ':(exclude)*.md' > "$W/changelog.txt"
+          else
+            : > "$W/changelog.txt"
+          fi
+
+          # /releases/latest is what install.sh and the update check follow. Only
+          # the highest Codex version may hold it, so re-cutting an older version
+          # cannot roll every installation back.
+          HIGHEST="$(git tag -l 'v*' | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)(-r[0-9]+)?$/\1/p' \
+                     | sort -V | tail -1)"
+          LATEST=true
+          if [ -n "$HIGHEST" ] && [ "$(printf '%s\n%s\n' "$HIGHEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            LATEST=false
+          fi
+
+          # --target pins the tag to the commit this run built.
+          publish() {
+            {
+              echo "Codex $VERSION built for Termux (Android AArch64, Bionic libc, no proot)."
+              case "$1" in
+                *-r*) echo
+                      echo "Re-release ${1##*-r} of Codex $VERSION: same upstream code, new patches or toolchain." \
+                           "\`codex update\` installs it (the installer compares binary hashes); the in-app" \
+                           "update prompt only reacts to new upstream versions." ;;
+              esac
+              cat <<EOF
 
           \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash
           \`\`\`
 
-          Built from upstream \`$(jq -r .tag_prefix "$W/versions.json")$VERSION\` with the patches in \`patches/\`.
-          Commit \`$(jq -r .upstream_commit build-manifest.json)\`. Binary SHA-256 \`$(jq -r .binary_sha256 build-manifest.json)\`.
+          Built from upstream \`$(jq -r .tag_prefix versions.json)$VERSION\` with the patches in \`patches/\`.
+          Commit \`$(jq -r .upstream_commit "$D/build-manifest.json")\`. Binary SHA-256 \`$(jq -r .binary_sha256 "$D/build-manifest.json")\`.
           Codex is Apache-2.0; LICENSE and NOTICE are in the tarball.
           EOF
-          gh release create "$TAG" --title "Codex $VERSION · Termux" \
-            --notes-file "$W/notes.md" \
-            codex-termux-aarch64.tar.gz codex-termux-aarch64.tar.gz.sha256 build-manifest.json
+              echo
+              if [ -n "$PREV" ]; then echo "Changes since \`$PREV\`:"; else echo "Changes:"; fi
+              echo
+              if [ -s "$W/changelog.txt" ]; then sed 's/^/- /' "$W/changelog.txt"; else echo "(none)"; fi
+            } > "$W/notes.md"
+            title="Codex $VERSION · Termux"
+            case "$1" in *-r*) title="$title (${1##*-})" ;; esac
+            gh release create "$1" --target "$GITHUB_SHA" --latest="$LATEST" \
+              --title "$title" --notes-file "$W/notes.md" $ASSETS
+          }
+
+          # A deleted immutable release still reserves its tag name. If the API
+          # rejects the name, take the next free v$VERSION-rN.
+          set +e
+          OUT="$(publish "$TAG" 2>&1)"
+          RC=$?
+          set -e
+          printf '%s\n' "$OUT"
+          if [ "$RC" != "0" ]; then
+            if ! printf '%s' "$OUT" | grep -q 'immutable release'; then
+              exit "$RC"
+            fi
+            N=1
+            while git ls-remote --tags origin "refs/tags/v$VERSION-r$N" | grep -q .; do
+              N=$((N+1))
+            done
+            echo "$TAG is reserved by an immutable release; re-cutting as v$VERSION-r$N"
+            TAG="v$VERSION-r$N"
+            publish "$TAG"
+          fi
           echo "released $TAG"
