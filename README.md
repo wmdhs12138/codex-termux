@@ -78,7 +78,7 @@ codex update
 
 ```bash
 pkg install rust clang cmake make git jq openssl liblzma pkg-config protobuf python
-VERSION=0.161.0 scripts/build.sh      # 产物在 dist/
+VERSION=0.162.0 scripts/build.sh      # 产物在 dist/
 ```
 
 第三方组件及许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。本项目与 OpenAI 无关联。

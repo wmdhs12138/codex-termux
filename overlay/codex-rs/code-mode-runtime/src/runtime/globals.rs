@@ -9,6 +9,7 @@ use rquickjs::function::Rest;
 
 use super::SharedState;
 use super::callbacks;
+use super::value::error_text;
 
 /// Wraps `f` into a JavaScript function named `name`. `f` sees all arguments as a slice.
 fn host_function<'js, F>(ctx: &Ctx<'js>, name: &str, f: F) -> Result<Function<'js>, String>
@@ -95,6 +96,12 @@ pub(super) fn install_globals<'js>(ctx: &Ctx<'js>, state: &SharedState) -> Resul
         let function = host_function(ctx, name, move |ctx, args| callback(ctx, &state, args))?;
         set_global(&global, name, function)?;
     }
+
+    // `as_settled` and `stream_settled` are plain ECMAScript, so upstream's settled.js (not an
+    // overlay copy) is evaluated as is, like the V8 runtime does.
+    ctx.eval::<(), _>(include_str!("settled.js")).map_err(|error| {
+        format!("failed to initialize settlement helpers: {}", error_text(ctx, error))
+    })?;
     Ok(())
 }
 
