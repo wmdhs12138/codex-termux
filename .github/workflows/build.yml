@@ -140,15 +140,11 @@ jobs:
         run: |
           set -euo pipefail
           docker pull "$TERMUX_DOCKER_IMAGE"
-          mkdir -p work
-          printf '%s' "$CODEX_VERSION" > work/codex-version
           sudo chmod -R a+rwX "$GITHUB_WORKSPACE"
           docker run --rm --privileged \
-            -e CODEX_VERSION_INPUT="$CODEX_VERSION" \
-            -e TERMUX_DOCKER_IMAGE="$TERMUX_DOCKER_IMAGE" \
             -v "$GITHUB_WORKSPACE:/data/data/com.termux/files/home/codex-termux" \
             -w /data/data/com.termux/files/home/codex-termux \
-            "$TERMUX_DOCKER_IMAGE" bash .github/ci/bionic-build.sh
+            "$TERMUX_DOCKER_IMAGE" bash .github/ci/bionic-build.sh "$CODEX_VERSION" "$TERMUX_DOCKER_IMAGE"
 
       - name: Verify Bionic acceptance manifest
         env:

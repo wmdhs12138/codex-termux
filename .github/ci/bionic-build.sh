@@ -7,11 +7,11 @@ trap 'rc=$?; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (ex
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-# termux-docker does not reliably hand `docker run -e` variables to the command, so the
-# workflow also writes the version into the mounted workspace; prefer the file.
-VERSION="$(cat work/codex-version 2>/dev/null || true)"
-[ -n "$VERSION" ] || VERSION="${CODEX_VERSION_INPUT:-}"
-echo "bionic-build: requested version='$VERSION' (env='${CODEX_VERSION_INPUT:-<unset>}')"
+# bionic-build.sh VERSION IMAGE. Arguments, not `docker run -e`: the image's entrypoint
+# does not pass those variables to the command.
+VERSION="${1:-}"
+IMAGE="${2:-unknown}"
+echo "bionic-build: requested version='$VERSION'"
 [ -n "$VERSION" ] || { echo "bionic-build: no version was passed in" >&2; exit 1; }
 
 echo "::group::Install Termux build dependencies"
@@ -347,13 +347,13 @@ fi
 done
 echo "::endgroup::"
 
-python3 - <<'PY'
-import json, os, platform
+python3 - "$IMAGE" <<'PY'
+import json, platform, sys
 with open("dist/build-manifest.json") as f:
     doc = json.load(f)
 doc["ci_acceptance"] = {
     "runtime": "termux-docker/bionic",
-    "termux_docker": os.environ.get("TERMUX_DOCKER_IMAGE", "unknown"),
+    "termux_docker": sys.argv[1],
     "architecture": platform.machine(),
     "version_probe": "pass",
     "smoke": "pass",
@@ -368,7 +368,7 @@ PY
   printf 'target=android-aarch64\n'
   printf 'runtime=bionic\n'
   printf 'architecture=%s\n' "$(uname -m)"
-  printf 'termux_docker=%s\n' "${TERMUX_DOCKER_IMAGE:-unknown}"
+  printf 'termux_docker=%s\n' "$IMAGE"
   printf 'rustc=%s\n' "$(rustc --version)"
   printf 'android_api=%s\n' "$(getprop ro.build.version.sdk 2>/dev/null || printf unknown)"
 } > work/bionic-ci.txt
