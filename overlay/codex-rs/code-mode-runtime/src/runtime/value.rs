@@ -5,9 +5,11 @@
 
 use rquickjs::Ctx;
 use rquickjs::Error;
+use rquickjs::Exception;
 use rquickjs::Object;
 use rquickjs::Value;
 use rquickjs::convert::Coerced;
+use rquickjs::qjs;
 use serde_json::Value as JsonValue;
 
 use codex_code_mode_protocol::DEFAULT_IMAGE_DETAIL;
@@ -15,6 +17,8 @@ use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use codex_code_mode_protocol::ImageDetail;
 
 use super::audio::wav_duration_seconds;
+use super::exit_requested;
+use super::is_terminating;
 
 const IMAGE_HELPER_EXPECTS_MESSAGE: &str = "image expects a non-empty image URL string, an object with image_url and optional detail, or a raw MCP image block";
 const AUDIO_HELPER_EXPECTS_MESSAGE: &str = "audio expects a non-empty audio URL string, an object with audio_url, or a raw MCP audio block";
@@ -25,10 +29,27 @@ const INVALID_AUDIO_URL_ERROR: &str =
     "Tool call failed: invalid audio output. Pass a base64 data URI instead";
 const CODEX_IMAGE_DETAIL_META_KEY: &str = "codex/imageDetail";
 const UNKNOWN_EXCEPTION: &str = "unknown code mode exception";
+const QUICKJS_CIRCULAR_JSON_ERROR: &str = "TypeError: circular reference";
+const V8_CIRCULAR_JSON_ERROR: &str = "TypeError: Converting circular structure to JSON";
+
+/// Throws the error that ends the script after `exit()` or host termination. QuickJS unwinds an
+/// uncatchable error past every `catch` and `finally`, like V8's `TerminateExecution`.
+pub(super) fn throw_termination<'js>(ctx: &Ctx<'js>) -> Error {
+    let _ = Exception::throw_internal(ctx, "interrupted");
+    let error = ctx.catch();
+    // SAFETY: both handles are live; the call only flags the error object.
+    unsafe { qjs::JS_SetUncatchableError(ctx.as_raw().as_ptr(), error.as_raw()) };
+    ctx.throw(error)
+}
 
 /// Throws `message` as a plain JavaScript string, like the V8 runtime did, and returns the
 /// error that tells QuickJS an exception is pending.
 pub(super) fn throw_string<'js>(ctx: &Ctx<'js>, message: &str) -> Error {
+    // Helpers report failures here after catching the exception that caused them. Keep
+    // termination uncatchable instead of replacing it with a JS error.
+    if is_terminating(ctx) {
+        return throw_termination(ctx);
+    }
     match rquickjs::String::from_str(ctx.clone(), message) {
         Ok(string) => ctx.throw(string.into_value()),
         Err(error) => error,
@@ -73,12 +94,30 @@ pub(super) fn serialize_output_text<'js>(
         return Ok(coerce_to_string(ctx, value).unwrap_or_default());
     }
 
+    match json_stringify(ctx, value)? {
+        Some(stringified) => Ok(stringified),
+        None => Ok(coerce_to_string(ctx, value).unwrap_or_default()),
+    }
+}
+
+/// `JSON.stringify(value)`; `Ok(None)` when it returns `undefined`.
+fn json_stringify<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> Result<Option<String>, String> {
     match ctx.json_stringify(value.clone()) {
         Ok(Some(stringified)) => stringified
             .to_string()
+            .map(Some)
             .map_err(|error| error_text(ctx, error)),
-        Ok(None) => Ok(coerce_to_string(ctx, value).unwrap_or_default()),
-        Err(error) => Err(error_text(ctx, error)),
+        Ok(None) => Ok(None),
+        Err(error) => {
+            let text = error_text(ctx, error);
+            // Word the JSON error scripts commonly hit the way V8 does (the stack follows).
+            match text.strip_prefix(QUICKJS_CIRCULAR_JSON_ERROR) {
+                Some(stack) if stack.is_empty() || stack.starts_with('\n') => {
+                    Err(format!("{V8_CIRCULAR_JSON_ERROR}{stack}"))
+                }
+                _ => Err(text),
+            }
+        }
     }
 }
 
@@ -88,21 +127,38 @@ pub(super) fn value_to_json<'js>(
     ctx: &Ctx<'js>,
     value: &Value<'js>,
 ) -> Result<Option<JsonValue>, String> {
+    // A helper that swallowed an exit() from a getter must not run more JavaScript.
+    if is_terminating(ctx) {
+        return Err("JavaScript execution terminated".to_string());
+    }
     if value.is_undefined() {
         return Ok(None);
     }
 
-    match ctx.json_stringify(value.clone()) {
-        Ok(Some(stringified)) => {
-            let text = stringified
-                .to_string()
-                .map_err(|error| error_text(ctx, error))?;
-            serde_json::from_str(&text)
+    match json_stringify(ctx, value)? {
+        Some(json) => {
+            // QuickJS, like V8, emits compact JSON with these ASCII key names unescaped. The
+            // object/comma prefix and colon distinguish keys from string contents. Reject these
+            // before Serde can reinterpret them as values and bypass its normal recursion limit
+            // (upstream keeps this guard until its serde_json includes the fix).
+            if [
+                r#"{"$serde_json::private::RawValue":"#,
+                r#","$serde_json::private::RawValue":"#,
+                r#"{"$serde_json::private::Number":"#,
+                r#","$serde_json::private::Number":"#,
+            ]
+            .into_iter()
+            .any(|key| json.contains(key))
+            {
+                return Err(
+                    "failed to serialize JavaScript value: reserved JSON object key".to_string(),
+                );
+            }
+            serde_json::from_str(&json)
                 .map(Some)
                 .map_err(|err| format!("failed to serialize JavaScript value: {err}"))
         }
-        Ok(None) => Ok(None),
-        Err(error) => Err(error_text(ctx, error)),
+        None => Ok(None),
     }
 }
 
@@ -118,9 +174,19 @@ pub(super) fn json_to_value<'js>(ctx: &Ctx<'js>, value: &JsonValue) -> Option<Va
 }
 
 pub(super) fn value_to_error_text<'js>(ctx: &Ctx<'js>, value: &Value<'js>) -> String {
-    if value.is_object()
-        && let Some(object) = value.as_object()
-        && let Ok(stack) = object.get::<_, Value>("stack")
+    // The stack getter can call exit(); never enter user-defined code after that.
+    // send_state_result reports this as successful exit and preserves prior stores.
+    if exit_requested(ctx) {
+        return String::new();
+    }
+    let stack = value
+        .as_object()
+        .filter(|_| value.is_object())
+        .and_then(|object| get_property(ctx, object, "stack"));
+    if exit_requested(ctx) {
+        return String::new();
+    }
+    if let Some(stack) = stack
         && stack.is_string()
         && let Some(stack) = coerce_to_string(ctx, &stack)
     {

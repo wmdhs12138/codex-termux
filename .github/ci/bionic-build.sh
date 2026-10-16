@@ -59,10 +59,9 @@ ACTUAL="$(python3 -c 'import json; print(json.load(open("dist/build-manifest.jso
 
 echo "::group::Conformance: upstream's code-mode runtime tests on QuickJS"
 # The V8 runtime ships ~70 behaviour tests that go through the service API. Run them against
-# the QuickJS replacement. Three are expected to differ and are skipped by name:
-#   - the two ICU tests format a date in French, but only en-US has locale data here (the Intl
-#     overlay falls back to en-US, as the specification prescribes for unsupported locales);
-#   - the circular-JSON test pins V8's wording ("Converting circular structure to JSON").
+# the QuickJS replacement. Two are expected to differ and are skipped by name: they format a
+# date in French, but only en-US has locale data here (the Intl overlay falls back to en-US, as
+# the specification prescribes for unsupported locales).
 (
   export WORK="$ROOT/work"
   # shellcheck source=../../scripts/cargo-env.sh
@@ -70,8 +69,7 @@ echo "::group::Conformance: upstream's code-mode runtime tests on QuickJS"
   cd "$WORK/codex/codex-rs"
   cargo test --release -p codex-code-mode-runtime --message-format short -- \
     --skip date_locale_string_formats_with_icu_data \
-    --skip intl_date_time_format_formats_with_icu_data \
-    --skip text_helper_surfaces_stringify_errors
+    --skip intl_date_time_format_formats_with_icu_data
 )
 echo "::endgroup::"
 

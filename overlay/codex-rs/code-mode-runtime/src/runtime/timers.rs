@@ -9,6 +9,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use super::RuntimeCommand;
 use super::SharedState;
+use super::exit_requested;
 use super::value::error_text;
 
 pub(super) struct ScheduledTimeout {
@@ -33,7 +34,7 @@ pub(super) fn schedule_timeout<'js>(
     ctx: &Ctx<'js>,
     state: &SharedState,
     args: &[Value<'js>],
-) -> Result<u64, String> {
+) -> Result<Option<u64>, String> {
     let callback = args
         .first()
         .and_then(Value::as_function)
@@ -44,6 +45,10 @@ pub(super) fn schedule_timeout<'js>(
         .and_then(|delay| number_value(ctx, delay))
         .map(normalize_delay_ms)
         .unwrap_or(0);
+    // Converting the delay can execute JavaScript that calls exit().
+    if exit_requested(ctx) {
+        return Ok(None);
+    }
 
     let callback = Persistent::save(ctx, callback.clone());
     let mut state = state.borrow_mut();
@@ -63,7 +68,7 @@ pub(super) fn schedule_timeout<'js>(
         },
     );
 
-    Ok(timeout_id)
+    Ok(Some(timeout_id))
 }
 
 pub(super) fn clear_timeout<'js>(
@@ -75,7 +80,9 @@ pub(super) fn clear_timeout<'js>(
         return Ok(());
     };
 
-    state.borrow_mut().pending_timeouts.remove(&timeout_id);
+    if !exit_requested(ctx) {
+        state.borrow_mut().pending_timeouts.remove(&timeout_id);
+    }
     Ok(())
 }
 

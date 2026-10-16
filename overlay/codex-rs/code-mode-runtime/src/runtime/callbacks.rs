@@ -3,6 +3,10 @@
 //! Each takes the call's arguments as a slice (missing ones read as `undefined`, like in
 //! JavaScript) and returns the JavaScript result, or an error that has already thrown the
 //! exception the script will see.
+//!
+//! Converting arguments can run JavaScript (getters, `toJSON`, `toString`, `valueOf`) that
+//! calls `exit()`. After that a helper must take no effect; the wrapper in `globals` then
+//! turns whatever it returns into the uncatchable termination error.
 
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
 use rquickjs::Ctx;
@@ -12,10 +16,11 @@ use rquickjs::Result;
 use rquickjs::Value;
 use std::sync::Arc;
 
-use super::EXIT_SENTINEL;
 use super::PendingToolCall;
 use super::RuntimeEvent;
 use super::SharedState;
+use super::exit_requested;
+use super::request_exit;
 use super::timers;
 use super::value::coerce_to_string;
 use super::value::json_to_value;
@@ -23,6 +28,7 @@ use super::value::normalize_output_audio;
 use super::value::normalize_output_image;
 use super::value::serialize_output_text;
 use super::value::throw_string;
+use super::value::throw_termination;
 use super::value::value_to_json;
 
 fn undefined<'js>(ctx: &Ctx<'js>) -> Value<'js> {
@@ -51,6 +57,10 @@ pub(super) fn tool_callback<'js>(
     } else {
         value_to_json(ctx, &args[0]).map_err(|error_text| throw_string(ctx, &error_text))?
     };
+    // Input serialization can call exit() from a getter or toJSON.
+    if exit_requested(ctx) {
+        return Ok(undefined(ctx));
+    }
 
     let (tool_name, tool_kind) = {
         let state = state.borrow();
@@ -90,7 +100,9 @@ pub(super) fn text_callback<'js>(
     let value = arg(ctx, args, 0);
     let text = serialize_output_text(ctx, &value)
         .map_err(|error_text| throw_string(ctx, &error_text))?;
-    send_content_item(state, FunctionCallOutputContentItem::InputText { text });
+    if !exit_requested(ctx) {
+        send_content_item(state, FunctionCallOutputContentItem::InputText { text });
+    }
     Ok(undefined(ctx))
 }
 
@@ -101,7 +113,9 @@ pub(super) fn audio_callback<'js>(
 ) -> Result<Value<'js>> {
     let value = arg(ctx, args, 0);
     let audio_item = normalize_output_audio(ctx, &value)?;
-    send_content_item(state, audio_item);
+    if !exit_requested(ctx) {
+        send_content_item(state, audio_item);
+    }
     Ok(undefined(ctx))
 }
 
@@ -127,7 +141,9 @@ pub(super) fn image_callback<'js>(
         }
     };
     let image_item = normalize_output_image(ctx, &value, detail_override)?;
-    send_content_item(state, image_item);
+    if !exit_requested(ctx) {
+        send_content_item(state, image_item);
+    }
     Ok(undefined(ctx))
 }
 
@@ -140,9 +156,11 @@ pub(super) fn generated_image_callback<'js>(
     let output_hint = generated_image_output_hint(ctx, &value)
         .map_err(|error_text| throw_string(ctx, &error_text))?;
     let image_item = normalize_output_image(ctx, &value, /*detail_override*/ None)?;
-    send_content_item(state, image_item);
-    if let Some(text) = output_hint {
-        send_content_item(state, FunctionCallOutputContentItem::InputText { text });
+    if !exit_requested(ctx) {
+        send_content_item(state, image_item);
+        if let Some(text) = output_hint {
+            send_content_item(state, FunctionCallOutputContentItem::InputText { text });
+        }
     }
     Ok(undefined(ctx))
 }
@@ -184,6 +202,9 @@ pub(super) fn store_callback<'js>(
         }
         Err(error_text) => return Err(throw_string(ctx, &error_text)),
     };
+    if exit_requested(ctx) {
+        return Ok(undefined(ctx));
+    }
     let serialized = Arc::new(serialized);
     let mut state = state.borrow_mut();
     state
@@ -219,7 +240,7 @@ pub(super) fn notify_callback<'js>(
     if text.trim().is_empty() {
         return Err(throw_string(ctx, "notify expects non-empty text"));
     }
-    {
+    if !exit_requested(ctx) {
         let state = state.borrow();
         let _ = state.event_tx.send(RuntimeEvent::Notify {
             call_id: state.tool_call_id.clone(),
@@ -234,8 +255,11 @@ pub(super) fn set_timeout_callback<'js>(
     state: &SharedState,
     args: &[Value<'js>],
 ) -> Result<Value<'js>> {
-    let timeout_id = timers::schedule_timeout(ctx, state, args)
-        .map_err(|error_text| throw_string(ctx, &error_text))?;
+    let Some(timeout_id) = timers::schedule_timeout(ctx, state, args)
+        .map_err(|error_text| throw_string(ctx, &error_text))?
+    else {
+        return Ok(undefined(ctx));
+    };
     (timeout_id as f64).into_js(ctx)
 }
 
@@ -253,15 +277,21 @@ pub(super) fn yield_control_callback<'js>(
     state: &SharedState,
     _args: &[Value<'js>],
 ) -> Result<Value<'js>> {
-    let _ = state.borrow().event_tx.send(RuntimeEvent::YieldRequested);
+    if !exit_requested(ctx) {
+        let _ = state.borrow().event_tx.send(RuntimeEvent::YieldRequested);
+    }
     Ok(undefined(ctx))
 }
 
 pub(super) fn exit_callback<'js>(
     ctx: &Ctx<'js>,
-    state: &SharedState,
+    _state: &SharedState,
     _args: &[Value<'js>],
 ) -> Result<Value<'js>> {
-    state.borrow_mut().exit_requested = true;
-    Err(throw_string(ctx, EXIT_SENTINEL))
+    request_exit(ctx);
+    Err(throw_termination(ctx))
 }
+
+#[cfg(test)]
+#[path = "callbacks_tests.rs"]
+mod tests;

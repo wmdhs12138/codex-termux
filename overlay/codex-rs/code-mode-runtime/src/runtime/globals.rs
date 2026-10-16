@@ -7,17 +7,32 @@ use rquickjs::Object;
 use rquickjs::Value;
 use rquickjs::function::Rest;
 
+use codex_code_mode_protocol::EnabledToolMetadata;
+
 use super::SharedState;
 use super::callbacks;
+use super::is_terminating;
 use super::value::error_text;
+use super::value::throw_termination;
 
 /// Wraps `f` into a JavaScript function named `name`. `f` sees all arguments as a slice.
+///
+/// V8's termination stays in effect when a callback returns; QuickJS's uncatchable error is
+/// gone once a helper has caught it while converting its arguments. So once the script is
+/// terminating, no helper returns normally: the script gets the termination error back.
 fn host_function<'js, F>(ctx: &Ctx<'js>, name: &str, f: F) -> Result<Function<'js>, String>
 where
     F: Fn(&Ctx<'js>, &[Value<'js>]) -> rquickjs::Result<Value<'js>> + 'js,
 {
     Function::new(ctx.clone(), move |ctx: Ctx<'js>, args: Rest<Value<'js>>| {
-        f(&ctx, &args.0)
+        if is_terminating(&ctx) {
+            return Err(throw_termination(&ctx));
+        }
+        let result = f(&ctx, &args.0);
+        if is_terminating(&ctx) {
+            return Err(throw_termination(&ctx));
+        }
+        result
     })
     .and_then(|function| function.with_name(name))
     .map_err(|error| format!("failed to create helper function `{name}`: {error}"))
@@ -25,7 +40,11 @@ where
 
 type Callback = for<'js> fn(&Ctx<'js>, &SharedState, &[Value<'js>]) -> rquickjs::Result<Value<'js>>;
 
-pub(super) fn install_globals<'js>(ctx: &Ctx<'js>, state: &SharedState) -> Result<(), String> {
+pub(super) fn install_globals<'js>(
+    ctx: &Ctx<'js>,
+    state: &SharedState,
+    enabled_tools: &[EnabledToolMetadata],
+) -> Result<(), String> {
     let global = ctx.globals();
     // Same environment as the V8 runtime: what the exec description promises is plain
     // ECMAScript, so drop the web-ish extras QuickJS-ng adds on top (and the usual V8 removals).
@@ -49,7 +68,6 @@ pub(super) fn install_globals<'js>(ctx: &Ctx<'js>, state: &SharedState) -> Resul
     // QuickJS has no Intl; V8 had it, so scripts may rely on it.
     super::intl::install_intl(ctx)?;
 
-    let enabled_tools = state.borrow().enabled_tools.clone();
     let tools = Object::new(ctx.clone())
         .map_err(|error| format!("failed to allocate the tools object: {error}"))?;
     for (tool_index, tool) in enabled_tools.iter().enumerate() {

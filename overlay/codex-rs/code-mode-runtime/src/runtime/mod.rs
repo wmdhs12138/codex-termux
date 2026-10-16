@@ -14,6 +14,7 @@ mod module_loader;
 mod timers;
 mod value;
 
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
@@ -29,11 +30,12 @@ use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::EnabledToolMetadata;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
-use codex_code_mode_protocol::enabled_tool_metadata;
+use codex_code_mode_protocol::normalize_code_mode_identifier;
 use codex_protocol::ToolName;
 use rquickjs::Context;
 use rquickjs::Ctx;
 use rquickjs::Function;
+use rquickjs::JsLifetime;
 use rquickjs::Persistent;
 use rquickjs::Promise;
 use rquickjs::Runtime;
@@ -41,8 +43,6 @@ use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 
 use crate::TaskFailureHandler;
-
-const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
@@ -110,6 +110,51 @@ impl TerminateHandle {
     }
 }
 
+/// Whether the script must stop: it called `exit()` (a successful end), or the host terminated
+/// it through [`TerminateHandle`] (an error). The QuickJS stand-in for V8's
+/// `is_execution_terminating`: it lives in the runtime's userdata so that helpers holding only
+/// the context can check it, and the interrupt handler polls it so that no JavaScript keeps
+/// running once it is set.
+#[derive(Clone)]
+pub(super) struct Termination {
+    exit_requested: Rc<Cell<bool>>,
+    terminate: TerminateHandle,
+}
+
+// SAFETY: holds no JavaScript values, so it is the same type for every lifetime.
+unsafe impl<'js> JsLifetime<'js> for Termination {
+    type Changed<'to> = Termination;
+}
+
+impl Termination {
+    fn new(terminate: TerminateHandle) -> Self {
+        Self {
+            exit_requested: Rc::new(Cell::new(false)),
+            terminate,
+        }
+    }
+
+    fn is_terminating(&self) -> bool {
+        self.exit_requested.get() || self.terminate.is_terminated()
+    }
+}
+
+pub(super) fn request_exit(ctx: &Ctx<'_>) {
+    if let Some(termination) = ctx.userdata::<Termination>() {
+        termination.exit_requested.set(true);
+    }
+}
+
+pub(super) fn exit_requested(ctx: &Ctx<'_>) -> bool {
+    ctx.userdata::<Termination>()
+        .is_some_and(|termination| termination.exit_requested.get())
+}
+
+pub(super) fn is_terminating(ctx: &Ctx<'_>) -> bool {
+    ctx.userdata::<Termination>()
+        .is_some_and(|termination| termination.is_terminating())
+}
+
 pub(crate) fn spawn_runtime(
     stored_values: HashMap<String, Arc<JsonValue>>,
     request: ExecuteRequest,
@@ -130,8 +175,13 @@ pub(crate) fn spawn_runtime(
     let terminate_handle = TerminateHandle::new();
     let enabled_tools = request
         .enabled_tools
-        .iter()
-        .map(enabled_tool_metadata)
+        .into_iter()
+        .map(|definition| EnabledToolMetadata {
+            global_name: normalize_code_mode_identifier(&definition.name),
+            tool_name: definition.tool_name,
+            description: definition.description,
+            kind: definition.kind,
+        })
         .collect::<Vec<_>>();
     let config = RuntimeConfig {
         tool_call_id: request.tool_call_id,
@@ -186,19 +236,23 @@ pub(super) struct PendingToolCall {
     reject: Persistent<Function<'static>>,
 }
 
+// Callback indices refer to this cell's original catalog for its entire lifetime.
+struct ToolCallbackMetadata {
+    tool_name: ToolName,
+    kind: CodeModeToolKind,
+}
+
 pub(super) struct RuntimeState {
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     pending_tool_calls: HashMap<String, PendingToolCall>,
     pending_timeouts: HashMap<u64, timers::ScheduledTimeout>,
     stored_values: HashMap<String, Arc<JsonValue>>,
     stored_value_writes: HashMap<String, Arc<JsonValue>>,
-    enabled_tools: Vec<EnabledToolMetadata>,
+    enabled_tools: Vec<ToolCallbackMetadata>,
     next_tool_call_id: u64,
     next_timeout_id: u64,
     tool_call_id: String,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
-    terminate: TerminateHandle,
-    exit_requested: bool,
 }
 
 /// The runtime state is shared with the host functions installed into the script's globals.
@@ -222,10 +276,7 @@ impl Drop for StateCleanup {
 
 pub(super) enum CompletionState {
     Pending,
-    Completed {
-        stored_value_writes: HashMap<String, Arc<JsonValue>>,
-        error_text: Option<String>,
-    },
+    Completed { error_text: Option<String> },
 }
 
 fn run_runtime(
@@ -248,8 +299,9 @@ fn run_runtime(
             return;
         }
     };
-    let interrupt = terminate.clone();
-    runtime.set_interrupt_handler(Some(Box::new(move || interrupt.is_terminated())));
+    let termination = Termination::new(terminate);
+    let interrupt = termination.clone();
+    runtime.set_interrupt_handler(Some(Box::new(move || interrupt.is_terminating())));
     runtime.set_loader(
         module_loader::RejectImports,
         module_loader::RejectImports,
@@ -268,6 +320,14 @@ fn run_runtime(
     };
 
     context.with(|ctx| {
+        if ctx.store_userdata(termination).is_err() {
+            send_result(
+                &event_tx,
+                HashMap::new(),
+                Some("failed to initialize the JavaScript runtime state".to_string()),
+            );
+            return;
+        }
         run_in_context(
             &ctx,
             config,
@@ -275,13 +335,11 @@ fn run_runtime(
             &command_rx,
             &control_rx,
             pending_mode,
-            terminate,
             runtime_command_tx,
         );
     });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_in_context<'js>(
     ctx: &Ctx<'js>,
     config: RuntimeConfig,
@@ -289,7 +347,6 @@ fn run_in_context<'js>(
     command_rx: &std_mpsc::Receiver<RuntimeCommand>,
     control_rx: &std_mpsc::Receiver<RuntimeControlCommand>,
     pending_mode: PendingRuntimeMode,
-    terminate: TerminateHandle,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
 ) {
     let state: SharedState = Rc::new(RefCell::new(RuntimeState {
@@ -298,37 +355,39 @@ fn run_in_context<'js>(
         pending_timeouts: HashMap::new(),
         stored_values: config.stored_values,
         stored_value_writes: HashMap::new(),
-        enabled_tools: config.enabled_tools,
+        enabled_tools: config
+            .enabled_tools
+            .iter()
+            .map(|tool| ToolCallbackMetadata {
+                tool_name: tool.tool_name.clone(),
+                kind: tool.kind,
+            })
+            .collect(),
         next_tool_call_id: 1,
         next_timeout_id: 1,
         tool_call_id: config.tool_call_id,
         runtime_command_tx,
-        terminate,
-        exit_requested: false,
     }));
     let _cleanup = StateCleanup(Rc::clone(&state));
 
-    if let Err(error_text) = globals::install_globals(ctx, &state) {
+    if let Err(error_text) = globals::install_globals(ctx, &state, &config.enabled_tools) {
         send_result(event_tx, HashMap::new(), Some(error_text));
         return;
     }
 
     let _ = event_tx.send(RuntimeEvent::Started);
 
-    let pending_promise = match module_loader::evaluate_main_module(ctx, &state, &config.source) {
+    let pending_promise = match module_loader::evaluate_main_module(ctx, &config.source) {
         Ok(pending_promise) => pending_promise,
         Err(error_text) => {
-            send_state_result(&state, event_tx, Some(error_text));
+            send_state_result(ctx, &state, event_tx, Some(error_text));
             return;
         }
     };
 
-    match module_loader::completion_state(ctx, &state, pending_promise.as_ref()) {
-        CompletionState::Completed {
-            stored_value_writes,
-            error_text,
-        } => {
-            send_result(event_tx, stored_value_writes, error_text);
+    match module_loader::completion_state(ctx, pending_promise.as_ref()) {
+        CompletionState::Completed { error_text } => {
+            send_state_result(ctx, &state, event_tx, error_text);
             return;
         }
         CompletionState::Pending => {}
@@ -341,7 +400,7 @@ fn run_in_context<'js>(
                 if let Err(error_text) =
                     module_loader::resolve_tool_response(ctx, &state, &id, Ok(result))
                 {
-                    send_state_result(&state, event_tx, Some(error_text));
+                    send_state_result(ctx, &state, event_tx, Some(error_text));
                     return;
                 }
             }
@@ -349,26 +408,23 @@ fn run_in_context<'js>(
                 if let Err(runtime_error) =
                     module_loader::resolve_tool_response(ctx, &state, &id, Err(error_text))
                 {
-                    send_state_result(&state, event_tx, Some(runtime_error));
+                    send_state_result(ctx, &state, event_tx, Some(runtime_error));
                     return;
                 }
             }
             RuntimeCommand::TimeoutFired { id } => {
                 if let Err(runtime_error) = timers::invoke_timeout_callback(ctx, &state, id) {
-                    send_state_result(&state, event_tx, Some(runtime_error));
+                    send_state_result(ctx, &state, event_tx, Some(runtime_error));
                     return;
                 }
             }
             RuntimeCommand::ObservePendingFrontier => {}
         }
 
-        module_loader::run_pending_jobs(ctx, &state);
-        match module_loader::completion_state(ctx, &state, pending_promise.as_ref()) {
-            CompletionState::Completed {
-                stored_value_writes,
-                error_text,
-            } => {
-                send_result(event_tx, stored_value_writes, error_text);
+        module_loader::run_pending_jobs(ctx);
+        match module_loader::completion_state(ctx, pending_promise.as_ref()) {
+            CompletionState::Completed { error_text } => {
+                send_state_result(ctx, &state, event_tx, error_text);
                 return;
             }
             CompletionState::Pending => {}
@@ -403,11 +459,15 @@ fn next_runtime_command(
 }
 
 fn send_state_result(
+    ctx: &Ctx<'_>,
     state: &SharedState,
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
     error_text: Option<String>,
 ) {
+    // Error rendering can itself run JS getters, including exit(). Capture
+    // the result only after every call into the exiting runtime has returned.
     let stored_value_writes = state.borrow().stored_value_writes.clone();
+    let error_text = error_text.filter(|_| !exit_requested(ctx));
     send_result(event_tx, stored_value_writes, error_text);
 }
 
@@ -493,40 +553,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminate_execution_stops_cpu_bound_module() {
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let (_runtime_tx, _runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
-            HashMap::new(),
-            execute_request("while (true) {}"),
-            event_tx,
-            PendingRuntimeMode::Continue,
-            /*task_failure_handler*/ None,
-        )
-        .unwrap();
-
-        let started_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-            .await
-            .unwrap()
+    async fn terminate_execution_stops_javascript() {
+        for source in [
+            r#"notify("started"); while (true) {}"#,
+            // The failed first read enters JSON fallback, whose TryCatch must preserve termination.
+            r#"
+let reads = 0;
+const value = {
+    get image_url() {
+        if (++reads === 1) throw new Error("enter fallback");
+        notify("started");
+        while (true) {}
+    }
+};
+try { image(value); } catch {}
+text("continued after cancellation");
+"#,
+        ] {
+            let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+            let (_runtime_tx, _runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
+                HashMap::new(),
+                execute_request(source),
+                event_tx,
+                PendingRuntimeMode::Continue,
+                /*task_failure_handler*/ None,
+            )
             .unwrap();
-        assert!(matches!(started_event, RuntimeEvent::Started));
 
-        assert!(runtime_terminate_handle.terminate_execution());
-
-        let result_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let RuntimeEvent::Result { error_text, .. } = result_event else {
-            panic!("expected runtime result after termination");
-        };
-        assert!(error_text.is_some());
-
-        assert!(
-            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            let started_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
                 .await
                 .unwrap()
-                .is_none()
-        );
+                .unwrap();
+            assert!(matches!(started_event, RuntimeEvent::Started));
+
+            // Started precedes evaluation; the notification proves the workload is running.
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                    .await
+                    .unwrap(),
+                Some(RuntimeEvent::Notify { .. })
+            ));
+            assert!(runtime_terminate_handle.terminate_execution());
+
+            let result_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let RuntimeEvent::Result { error_text, .. } = result_event else {
+                panic!("expected runtime result after termination");
+            };
+            assert!(error_text.is_some());
+
+            assert!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     #[tokio::test]
