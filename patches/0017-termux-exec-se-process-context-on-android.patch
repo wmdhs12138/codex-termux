@@ -1,8 +1,8 @@
 diff --git a/codex-rs/arg0/src/lib.rs b/codex-rs/arg0/src/lib.rs
-index 5bed3b9..b061e00 100644
+index 31ed372..b36ae73 100644
 --- a/codex-rs/arg0/src/lib.rs
 +++ b/codex-rs/arg0/src/lib.rs
-@@ -162,6 +162,8 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
+@@ -130,6 +130,8 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
      // This modifies the environment, which is not thread-safe, so do this
      // before creating any threads/the Tokio runtime.
      load_dotenv();
@@ -11,7 +11,7 @@ index 5bed3b9..b061e00 100644
  
      let (path_entry_guard, updated_path_env_var) = prepare_path_env_var_with_aliases(
          InstallContext::current(),
-@@ -327,6 +329,55 @@ where
+@@ -293,6 +295,55 @@ where
      }
  }
  
@@ -41,7 +41,7 @@ index 5bed3b9..b061e00 100644
 +}
 +
 +/// Returns the context if termux-exec would accept it,
-+/// `^u:r:[^\n :]+:s0(:c[0-9]+,c[0-9]+(,c[0-9]+,c[0-9]+)?)?$`. It warns on every exec about
++/// `^u:r:[^\n\t\r :]+:s0(:c[0-9]+,c[0-9]+(,c[0-9]+,c[0-9]+)?)?$`. It warns on every exec about
 +/// any other value, such as the AppArmor label `/proc/self/attr/current` holds in a container.
 +#[cfg(any(target_os = "android", test))]
 +fn se_process_context(raw: &[u8]) -> Option<&str> {
@@ -50,7 +50,7 @@ index 5bed3b9..b061e00 100644
 +        .trim_end_matches(['\0', '\n']);
 +    let (domain, level) = context.strip_prefix("u:r:")?.split_once(':')?;
 +    let categories = level.strip_prefix("s0")?;
-+    let domain_ok = !domain.is_empty() && !domain.contains([' ', '\n']);
++    let domain_ok = !domain.is_empty() && !domain.contains([' ', '\n', '\t', '\r']);
 +    let categories_ok = categories.is_empty()
 +        || categories.strip_prefix(':').is_some_and(|categories| {
 +            let categories = categories.split(',').collect::<Vec<_>>();
@@ -67,7 +67,7 @@ index 5bed3b9..b061e00 100644
  /// Creates a temporary directory with either:
  ///
  /// - UNIX: `apply_patch` symlink to the current executable
-@@ -544,6 +595,7 @@ mod tests {
+@@ -511,6 +562,7 @@ mod tests {
      use super::linux_sandbox_exe_path;
      #[cfg(unix)]
      use super::run_main_with_arg0_guard;
@@ -75,7 +75,7 @@ index 5bed3b9..b061e00 100644
      #[cfg(unix)]
      use anyhow::ensure;
      use codex_install_context::CodexPackageLayout;
-@@ -812,4 +864,30 @@ mod tests {
+@@ -818,4 +870,32 @@ mod tests {
          assert!(!dir.exists());
          Ok(())
      }
@@ -101,16 +101,18 @@ index 5bed3b9..b061e00 100644
 +            (b"u:r:untrusted_app:s0:c512,c768,c1", None),
 +            (b"u:r:untrusted_app:s0:c512,x768", None),
 +            (b"u:r:untrusted app:s0", None),
++            (b"u:r:untrusted\tapp:s0", None),
++            (b"u:r:untrusted\rapp:s0", None),
 +        ] {
 +            assert_eq!(se_process_context(raw), expected, "{raw:?}");
 +        }
 +    }
  }
 diff --git a/codex-rs/protocol/src/shell_environment.rs b/codex-rs/protocol/src/shell_environment.rs
-index e8bdaa4..03ecead 100644
+index 0c6c515..fa438f5 100644
 --- a/codex-rs/protocol/src/shell_environment.rs
 +++ b/codex-rs/protocol/src/shell_environment.rs
-@@ -9,6 +9,10 @@ pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_
+@@ -10,6 +10,10 @@ pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_
  pub const OPENAI_FEDERATION_RULE_ID_ENV_VAR: &str = "OPENAI_FEDERATION_RULE_ID";
  pub const OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR: &str = "OPENAI_IDENTITY_TOKEN_FILE";
  pub const OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR: &str = "OPENAI_WORKLOAD_IDENTITY_CONTEXT";
@@ -121,7 +123,7 @@ index e8bdaa4..03ecead 100644
  
  /// Environment variables that model-reachable child processes must not inherit.
  pub const NON_INHERITABLE_ENV_VARS: &[&str] = &[
-@@ -95,6 +99,16 @@ pub fn populate_env<I>(
+@@ -110,6 +114,16 @@ pub fn populate_env<I>(
  where
      I: IntoIterator<Item = (String, String)>,
  {
@@ -138,7 +140,7 @@ index e8bdaa4..03ecead 100644
      // Step 1 - determine the starting set of variables based on the
      // `inherit` strategy.
      let mut env_map: HashMap<String, String> = match policy.inherit {
-@@ -152,6 +166,13 @@ where
+@@ -167,6 +181,13 @@ where
          env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
      }
  
@@ -152,7 +154,7 @@ index e8bdaa4..03ecead 100644
      // Restricted launch context cannot be restored through user-provided shell
      // environment overrides.
      env_map.retain(|name, _| !is_non_inheritable_env_var(name));
-@@ -319,4 +340,40 @@ mod non_windows_tests {
+@@ -334,4 +355,40 @@ mod non_windows_tests {
  
          assert_eq!(result, expected);
      }
