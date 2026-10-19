@@ -5,8 +5,9 @@
 #
 # Needs a real Termux prefix; CI runs it inside termux-docker after the build. It covers
 # patches 0011 (rendezvous directory and socket path length), 0012 (/proc based process
-# identity), 0013 (the daemon "package" is linked to the running codex, nothing to install) and
-# 0014 (no `ps`). Before 0011 `codex app-server --listen unix://` failed with EACCES on /tmp.
+# identity), 0013 (the daemon "package" is linked to the running codex, nothing to install),
+# 0014 (no `ps`) and 0019 (a deleted socket is bound again). Before 0011
+# `codex app-server --listen unix://` failed with EACCES on /tmp.
 #
 # DAEMON_TEST_SEED=1 links the managed package by hand, for a codex built before patch 0013.
 set -Eeuo pipefail
@@ -84,6 +85,34 @@ out="$("$CODEX" app-server daemon version)"
 echo "$out"
 [ "$(field "$out" cliVersion)" = "$VERSION" ] || fail "cli version != $VERSION"
 [ "$(field "$out" appServerVersion)" = "$VERSION" ] || fail "server version != $VERSION"
+
+# Termux empties $PREFIX/tmp when the app exits, and the daemon survives it. Remove the whole
+# directory when only this daemon uses it (CI), otherwise just its files (a phone that runs a
+# daemon of its own). The daemon checks every 2 s.
+echo "== socket deleted under the running daemon (0019)"
+TARGET="$(readlink "$SOCKET")"
+DIR="$(dirname "$TARGET")"
+if [ -z "$(find "$DIR" -mindepth 1 ! -path "$TARGET" ! -path "$TARGET.lock" -print -quit)" ]; then
+  rm -rf "$DIR"
+else
+  rm -f "$TARGET" "$TARGET.lock"
+fi
+for _ in $(seq 60); do [ -S "$TARGET" ] && break; sleep 0.1; done
+[ -S "$TARGET" ] || fail "the daemon did not listen on $TARGET again"
+out="$("$CODEX" app-server daemon version)" || fail "no server on the restored socket"
+[ "$(field "$out" status)" = running ] || fail "version did not report 'running': $out"
+alive "$PID" || fail "daemon $PID is gone"
+jq -e '.pid == '"$PID" "$PID_FILE" >/dev/null || fail "a new daemon replaced $PID"
+[ "$(stat -c %a "$DIR")" = 700 ] || fail "$DIR is not mode 0700"
+[ "$(stat -c %a "$TARGET")" = 600 ] || fail "$TARGET is not mode 0600"
+[ -e "$TARGET.lock" ] || fail "the startup lock was not created again"
+
+echo "== rendezvous link deleted under the running daemon (0019)"
+rm "$SOCKET"
+for _ in $(seq 60); do [ -L "$SOCKET" ] && break; sleep 0.1; done
+[ "$(readlink "$SOCKET" 2>/dev/null)" = "$TARGET" ] || fail "$SOCKET was not linked to $TARGET again"
+out="$("$CODEX" app-server daemon version)" || fail "no server through the restored link"
+[ "$(field "$out" status)" = running ] || fail "version did not report 'running': $out"
 
 echo "== restart"
 out="$("$CODEX" app-server daemon restart)"

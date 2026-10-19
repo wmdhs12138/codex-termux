@@ -293,7 +293,8 @@ LAST="$(ls "$ROOT/work/mock-code-mode-wait/out" | sort -V | tail -1)"
 python3 "$ROOT/tests/check_code_mode_wait.py" "$ROOT/work/mock-code-mode-wait/out/$LAST"
 
 # The shared background server: rendezvous socket under the Termux prefix, /proc identity,
-# start / reuse / restart / stop (patches 0011 to 0014).
+# start / reuse / restart / stop, a socket deleted under the running daemon (patches 0011 to 0014,
+# 0019).
 echo "::group::Shared background server lifecycle"
 bash "$ROOT/tests/test_daemon.sh" "$CODEX"
 echo "::endgroup::"

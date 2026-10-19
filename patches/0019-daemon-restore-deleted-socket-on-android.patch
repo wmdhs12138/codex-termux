@@ -1,0 +1,137 @@
+diff --git a/codex-rs/app-server-transport/src/transport/unix_socket.rs b/codex-rs/app-server-transport/src/transport/unix_socket.rs
+index fc57d8e..be9679c 100644
+--- a/codex-rs/app-server-transport/src/transport/unix_socket.rs
++++ b/codex-rs/app-server-transport/src/transport/unix_socket.rs
+@@ -33,6 +33,9 @@ const CONTROL_SOCKET_MODE: u32 = 0o600;
+ // reject oversized requests before the socket closes.
+ const MAX_UNFRAGMENTED_MESSAGE_BYTES_HEADER: &str =
+     "x-codex-websocket-max-unfragmented-message-bytes";
++// Clients wait up to 10 s for a server that is starting, so a restored socket is found in time.
++#[cfg(target_os = "android")]
++const CONTROL_SOCKET_CHECK_INTERVAL: Duration = Duration::from_secs(2);
+ 
+ #[derive(Clone, Copy)]
+ pub enum DaemonShutdownAccess {
+@@ -137,12 +140,26 @@ async fn run_control_socket_acceptor(
+     socket_guard: ControlSocketFileGuard,
+     daemon_shutdown_access: DaemonShutdownAccess,
+ ) {
++    #[cfg(target_os = "android")]
++    let mut socket_guard = socket_guard;
++    #[cfg(not(target_os = "android"))]
+     let _socket_guard = socket_guard;
++    #[cfg(target_os = "android")]
++    let mut socket_watch = ControlSocketWatch::new();
+     loop {
++        #[cfg(target_os = "android")]
++        let socket_check = socket_watch.tick();
++        #[cfg(not(target_os = "android"))]
++        let socket_check = std::future::pending::<()>();
+         let stream = tokio::select! {
+             _ = shutdown_token.cancelled() => {
+                 break;
+             }
++            _ = socket_check => {
++                #[cfg(target_os = "android")]
++                socket_watch.check(&mut listener, &mut socket_guard).await;
++                continue;
++            }
+             result = listener.accept() => {
+                 match result {
+                     Ok(stream) => stream,
+@@ -214,6 +231,95 @@ async fn run_control_socket_acceptor(
+     info!("control socket acceptor shutting down");
+ }
+ 
++/// Termux empties `$PREFIX/tmp` when the app exits, and the daemon outlives it: the socket and
++/// its startup lock are unlinked while the process keeps running, so every client fails with
++/// `No such file or directory` and no other server can start while this one holds the daemon
++/// lock. Check for that periodically and listen on the same path again.
++#[cfg(target_os = "android")]
++struct ControlSocketWatch {
++    interval: tokio::time::Interval,
++    failing: bool,
++}
++
++#[cfg(target_os = "android")]
++impl ControlSocketWatch {
++    fn new() -> Self {
++        let mut interval = tokio::time::interval(CONTROL_SOCKET_CHECK_INTERVAL);
++        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
++        Self {
++            interval,
++            failing: false,
++        }
++    }
++
++    async fn tick(&mut self) {
++        self.interval.tick().await;
++    }
++
++    async fn check(
++        &mut self,
++        listener: &mut UnixListener,
++        socket_guard: &mut ControlSocketFileGuard,
++    ) {
++        match restore_control_socket(listener, socket_guard).await {
++            Ok(()) => self.failing = false,
++            // Retried on every tick; report a persistent failure once.
++            Err(err) if !self.failing => {
++                self.failing = true;
++                warn!(%err, "failed to restore the app-server control socket");
++            }
++            Err(_) => {}
++        }
++    }
++}
++
++#[cfg(target_os = "android")]
++async fn restore_control_socket(
++    listener: &mut UnixListener,
++    socket_guard: &mut ControlSocketFileGuard,
++) -> IoResult<()> {
++    let socket_path = socket_guard.socket_path.as_path();
++    match std::fs::symlink_metadata(socket_path) {
++        Ok(_) => {}
++        Err(err) if err.kind() == ErrorKind::NotFound => {
++            // The same steps as at startup, in the same order.
++            codex_uds::prepare_shared_daemon_socket_directory()?;
++            let mut lock = try_acquire_removable_app_server_startup_lock(
++                AbsolutePathBuf::from_absolute_path_checked(socket_path.with_extension("lock"))?,
++            )?;
++            prepare_control_socket_path(socket_path).await?;
++            let restored = UnixListener::bind(socket_path).await?;
++            if let Err(err) = set_control_socket_permissions(socket_path).await {
++                let _ = std::fs::remove_file(socket_path);
++                return Err(err);
++            }
++            lock._file.unlock()?;
++            lock.remove_on_drop = true;
++            *listener = restored;
++            // The old lock's file is gone, so dropping it leaves the new one in place.
++            socket_guard._startup_lock = lock;
++            warn!(
++                socket_path = %socket_path.display(),
++                "app-server control socket was deleted; listening on it again"
++            );
++        }
++        Err(err) => return Err(err),
++    }
++    let rendezvous_path = socket_guard.rendezvous_path.as_path();
++    match std::fs::symlink_metadata(rendezvous_path) {
++        Ok(_) => Ok(()),
++        Err(err) if err.kind() == ErrorKind::NotFound => {
++            std::os::unix::fs::symlink(socket_path, rendezvous_path)?;
++            warn!(
++                rendezvous_path = %rendezvous_path.display(),
++                "app-server control socket link was deleted; linked it again"
++            );
++            Ok(())
++        }
++        Err(err) => Err(err),
++    }
++}
++
+ async fn run_daemon_shutdown(
+     mut websocket: tokio_tungstenite::WebSocketStream<UnixStream>,
+     transport_event_tx: mpsc::Sender<TransportEvent>,

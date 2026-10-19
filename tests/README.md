@@ -6,7 +6,7 @@
 | --- | --- |
 | `test_ci.py` | 发布逻辑（`python3 -m unittest -v tests/test_ci.py`，CI 的 `tests` 任务运行）：在临时 git 仓库里用假的 `gh` 真实执行 workflow 的 resolve 和 release 步骤：新版本用 `vX.Y.Z`、`recut` 取下一个 `-rN`、tag 钉在构建的提交上、旧版本重发不抢 Latest、被占用的 tag 名自动顺延、说明里列出相对上一个 Release 的补丁变更。需要 bash、git、jq、python3。 |
 | `test_install.sh` | `install.sh` 的离线场景（12 个）：全新安装、无变化不重复下载、缺宿主程序、哈希被改、降级、慢 `tar -t` 的回归，以及更新后重启运行中的守护进程的几种情形。只需 bash、tar、sha256sum、python3。 |
-| `test_daemon.sh <codex>` | 守护进程生命周期：自动链接、socket 路径长度、`/proc` 身份记录、不带远程控制、start / 复用 / version / restart / stop / bootstrap。 |
+| `test_daemon.sh <codex>` | 守护进程生命周期：自动链接、socket 路径长度、`/proc` 身份记录、不带远程控制、start / 复用 / version / restart / stop / bootstrap；以及补丁 0019：在守护进程运行时删掉 socket（只有它在用时删整个目录，模拟 Termux 清空 `$PREFIX/tmp`）和 `app-server-control.sock` 软链，它要在几秒内在原路径上恢复，且仍是同一个进程。 |
 | `test_daemon_session.sh <codex>` | 一个客户端经守护进程的控制 socket 跑完整的 Code Mode 会话，结果交给 `check_code_mode.py` 检查。 |
 | `test_daemon_tui.sh <codex>` | 真 TUI 在伪终端里用默认设置自动启动并连上守护进程；再测 `--no-daemon` 和 `features.daemon_auto_start=false` 两种关闭方式。 |
 | `test_subcommands.sh <codex>` | 不需要网络和账号的子命令：一个 stdio MCP 服务器（`mcp_echo.py`）被模型经 Code Mode 调用，`plugin` 用本地市场走完添加、安装、列表、卸载，`exec resume`、`archive` / `unarchive` / `delete`、`migrate-rollouts`、`features`、`completion`。 |
