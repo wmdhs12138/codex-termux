@@ -30,6 +30,11 @@ on:
         required: false
         default: false
         type: boolean
+      publish:
+        description: Publish a release after successful Bionic acceptance
+        required: false
+        default: true
+        type: boolean
   schedule:
     - cron: "0 3 * * *"
 
@@ -189,7 +194,9 @@ jobs:
 
   release:
     needs: [resolve, bionic]
-    if: needs.resolve.outputs.unreleased == 'true'
+    if: >-
+      needs.resolve.outputs.unreleased == 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.publish)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

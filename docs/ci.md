@@ -23,6 +23,8 @@ release ── 唯一有写权限的任务：发布 tarball、SHA-256 和 build-
 
 提交信息里带 `[skip ci]` 可以避免推送触发完整构建；之后用 `gh workflow run build.yml -f version=latest -f recut=true` 手动发布。
 
+仅运行构建和 Bionic 验收、不创建 Release 或 tag：`gh workflow run build.yml -f version=0.164.0 -f publish=false`。`publish` 默认开启，定时构建和推送的发布行为不变；关闭它仍会上传构建产物供下载检查。
+
 ## Bionic 里真实执行了什么
 
 | 阶段 | 内容 |
