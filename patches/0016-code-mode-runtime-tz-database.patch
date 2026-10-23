@@ -8,7 +8,7 @@ index b724578..d435610 100644
  rquickjs = { version = "=0.14.0", default-features = false, features = ["std", "bindgen", "loader"] }
 +# IANA time zone database for Intl.DateTimeFormat (QuickJS has no ICU): the copy bundled into the
 +# binary, as V8 bundles ICU's. Pinned to the version the workspace lockfile already has.
-+jiff = { version = "=0.2.23", features = ["tzdb-bundle-always"] }
++jiff = { version = "=0.2.38", features = ["tzdb-bundle-always"] }
  
  [dev-dependencies]
  pretty_assertions = { workspace = true }

@@ -96,9 +96,12 @@ def versions(doc):
 
 a, b = versions(orig), versions(new)
 # A version replaced by another one is an upgrade; pure additions or pure removals (a crate
-# that nothing uses any more) are expected.
+# that nothing uses any more) are expected. jiff-tzdb is exempt: patch 0016's tzdb-bundle-always
+# can need a newer one than upstream locks (there only for jiff-tzdb-platform on Windows/wasm),
+# and the crate is the IANA data alone.
+UPGRADE_OK = {"jiff-tzdb"}
 bumped = {n: (sorted(a[n] - b[n]), sorted(b[n] - a[n])) for n in a.keys() & b.keys()
-          if a[n] - b[n] and b[n] - a[n]}
+          if n not in UPGRADE_OK and a[n] - b[n] and b[n] - a[n]}
 added, removed = sorted(set(b) - set(a)), sorted(set(a) - set(b))
 print(f"Cargo.lock: {len(added)} crates added ({', '.join(added[:6])}...), "
       f"{len(removed)} dropped ({', '.join(removed) or '-'})")
