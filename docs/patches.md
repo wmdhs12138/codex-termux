@@ -1,8 +1,10 @@
 # 补丁与 overlay
 
-本项目不拷贝 Codex 源码：构建时按 tag 拉取上游 `openai/codex`，依次打上 [`patches/`](../patches) 里的补丁，再用 [`overlay/`](../overlay) 覆盖 Code Mode 的 JS 引擎层。补丁是对上游文件的普通 `git diff`，针对上游 `rust-v0.162.0`。
+本项目不拷贝 Codex 源码：构建时按 tag 拉取上游 `openai/codex`，依次打上 [`patches/`](../patches) 里的补丁，再用 [`overlay/`](../overlay) 覆盖 Code Mode 的 JS 引擎层。补丁是对上游文件的普通 `git diff`，针对上游 `rust-v0.164.0`。
 
 补丁采用精确匹配：上游结构变化导致补丁不再适用时，构建会直接失败，而不是产出未验证的文件。
+
+`rust-v0.164.0` 的适配审阅了 `arg0` 测试上下文和控制 socket 的 `DaemonSocketFileGuard` 重命名。overlay 的哈希变化来自 V8 的 ICU 77 → 78 初始化接口，以及两项已删除的 V8 专用测试新增 `result_buffered_for` 字段；QuickJS 实现无需修改。
 
 编号说明：`0004`（Android 上默认关闭共享后台服务）已在补丁 0013 解决了它的前提之后撤掉；`0002`（给 `codex-chatgpt` 加 `recursion_limit = "256"`）在上游 `rust-v0.161.0` 自己加上了同样的一行之后撤掉。编号不再复用。
 

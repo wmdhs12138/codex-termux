@@ -67,16 +67,7 @@ index 31ed372..b36ae73 100644
  /// Creates a temporary directory with either:
  ///
  /// - UNIX: `apply_patch` symlink to the current executable
-@@ -511,6 +562,7 @@ mod tests {
-     use super::linux_sandbox_exe_path;
-     #[cfg(unix)]
-     use super::run_main_with_arg0_guard;
-+    use super::se_process_context;
-     #[cfg(unix)]
-     use anyhow::ensure;
-     use codex_install_context::CodexPackageLayout;
-@@ -818,4 +870,32 @@ mod tests {
-         assert!(!dir.exists());
+@@ -819,3 +870,31 @@ mod tests {
          Ok(())
      }
 +
@@ -104,7 +95,7 @@ index 31ed372..b36ae73 100644
 +            (b"u:r:untrusted\tapp:s0", None),
 +            (b"u:r:untrusted\rapp:s0", None),
 +        ] {
-+            assert_eq!(se_process_context(raw), expected, "{raw:?}");
++            assert_eq!(super::se_process_context(raw), expected, "{raw:?}");
 +        }
 +    }
  }

@@ -4,8 +4,8 @@ d576e88135a44973fe2b4738b6806eb5bd04f3c999fc18113701f47a56f69042  codex-rs/code-
 01cb7f7b6016c92e84e3329ecc73704c7180eadaa5e0d6f7afcc3d53de9f6137  codex-rs/code-mode-runtime/src/runtime/module_loader.rs
 b6bd3d3d72ca37658cad6e7ccafcd9bd6c7b3d7ec2b24da7bdfe92f45dceee9e  codex-rs/code-mode-runtime/src/runtime/timers.rs
 7c8a5b67ae04bb4bd444ac676924889d558b47c3a379d32c0bf75c4fbf238f13  codex-rs/code-mode-runtime/src/runtime/value.rs
-79500e3312a744562b199c8e3983641195b40b7f3b4e88d4f21e2d177b8b635a  codex-rs/code-mode-runtime/src/v8_init.rs
+d923e9be4ac679c0f3b09e3c0f84bf381eb2a0de81a8a88838aea64ac6d34ff7  codex-rs/code-mode-runtime/src/v8_init.rs
 106112b51934b1022f212c5ad54771f4c59c3640e913371c623d720632cb0b8f  codex-rs/code-mode-runtime/src/runtime/callbacks_tests.rs
 e862d34e72a746c0946802cf9d4af7db69a65caf522ba85cc0d9512fe256e0d5  codex-rs/code-mode-runtime/src/runtime/module_loader_tests.rs
-f4591d5b615c2dc2290158950bfb07c5078e8004ddc951742700f7c345b25033  codex-rs/code-mode-runtime/tests/jit.rs
-397e68ac35bd5a1df1742f328adf0cca423a53ab36752bccc653bc72a452f2e8  codex-rs/code-mode-runtime/tests/array_sort.rs
+3d0109871ad575f7dea5ea13a0a064c1e363ba790a66d29d62ade79694e56d12  codex-rs/code-mode-runtime/tests/jit.rs
+1d372e9d2b9c0d213baec309ac4822431a6a2a2c8cb091ce5fcc96acdf81f2e6  codex-rs/code-mode-runtime/tests/array_sort.rs

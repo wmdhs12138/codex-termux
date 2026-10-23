@@ -12,9 +12,10 @@ index fc57d8e..be9679c 100644
  
  #[derive(Clone, Copy)]
  pub enum DaemonShutdownAccess {
-@@ -137,12 +140,26 @@ async fn run_control_socket_acceptor(
-     socket_guard: ControlSocketFileGuard,
+@@ -137,13 +140,27 @@ async fn run_control_socket_acceptor(
+     socket_guard: DaemonSocketFileGuard,
      daemon_shutdown_access: DaemonShutdownAccess,
+     compression: WebSocketCompression,
  ) {
 +    #[cfg(target_os = "android")]
 +    let mut socket_guard = socket_guard;
@@ -71,7 +72,7 @@ index fc57d8e..be9679c 100644
 +    async fn check(
 +        &mut self,
 +        listener: &mut UnixListener,
-+        socket_guard: &mut ControlSocketFileGuard,
++        socket_guard: &mut DaemonSocketFileGuard,
 +    ) {
 +        match restore_control_socket(listener, socket_guard).await {
 +            Ok(()) => self.failing = false,
@@ -88,7 +89,7 @@ index fc57d8e..be9679c 100644
 +#[cfg(target_os = "android")]
 +async fn restore_control_socket(
 +    listener: &mut UnixListener,
-+    socket_guard: &mut ControlSocketFileGuard,
++    socket_guard: &mut DaemonSocketFileGuard,
 +) -> IoResult<()> {
 +    let socket_path = socket_guard.socket_path.as_path();
 +    match std::fs::symlink_metadata(socket_path) {
