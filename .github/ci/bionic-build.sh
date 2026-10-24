@@ -127,11 +127,12 @@ test -e "$CODEX_HOME/thread-writer-locks/.coordination.lock"
 "$CODEX" logout >/dev/null
 test ! -e "$CODEX_HOME/auth.json"
 
-# The interactive TUI with default settings must reach its first screen. As in upstream it
-# auto-starts the shared daemon, which aborts with "no complete local package" unless it runs
-# from an official package layout; on Android the daemon links its own package (patch 0013).
-# Run it on a pty and check the first screen: it must enter the alternate screen instead of
-# printing the error. (tests/test_daemon_tui.sh covers the daemon side in detail.)
+# The interactive TUI with default settings must reach its first screen. Signed in, it
+# auto-starts the shared daemon as upstream does, which aborts with "no complete local package"
+# unless it runs from an official package layout; on Android the daemon links its own package
+# (patch 0013). Signed out, as here, 0.164.0 shows the Bedrock sign-in on the embedded server
+# instead. Run it on a pty and check the first screen: it must enter the alternate screen
+# instead of printing the error. (tests/test_daemon_tui.sh covers the daemon side, signed in.)
 rm -rf "$CODEX_HOME"; mkdir -p "$CODEX_HOME"
 set +e
 timeout -s KILL 10 script -qfec "$CODEX" work/tui-smoke.raw </dev/null >/dev/null 2>&1

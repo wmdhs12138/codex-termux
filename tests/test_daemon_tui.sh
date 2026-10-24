@@ -11,6 +11,10 @@
 # daemon behind, and that remote control stays off (it is opt-in, also upstream). Then the two
 # ways to opt out of the daemon: `--no-daemon` and `features.daemon_auto_start=false`.
 #
+# Every case is signed in with an API key first, as upstream's daemon_startup tests are: since
+# 0.164.0 a CODEX_HOME that is not signed in shows the Bedrock sign-in (`bedrock_setup_wizard`
+# is on by default), which runs on the embedded server and never starts the daemon.
+#
 # DAEMON_TEST_SEED=1 links the managed package by hand, for a codex built before patch 0013.
 set -Eeuo pipefail
 
@@ -24,12 +28,13 @@ cleanup() {
 }
 trap 'rc=$?; cleanup; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
-# run_tui <name> [codex options...]: the TUI on a pty for 15 s in a fresh CODEX_HOME.
+# run_tui <name> [codex options...]: the TUI on a pty for 15 s in a fresh, signed-in CODEX_HOME.
 # Not under $PREFIX/tmp: Codex refuses to create its helper binaries in a temp dir.
 run_tui() {
   local name="$1"; shift
   export CODEX_HOME="$W/$name/home"
   mkdir -p "$CODEX_HOME"
+  printf '%s' 'sk-fake-not-a-real-key-0000000000000000' | "$CODEX" login --with-api-key >/dev/null
   if [ "${DAEMON_TEST_SEED:-0}" = 1 ]; then
     mkdir -p "$CODEX_HOME/packages/app-server-daemon/current/bin"
     ln -s "$CODEX" "$CODEX_HOME/packages/app-server-daemon/current/bin/codex"
