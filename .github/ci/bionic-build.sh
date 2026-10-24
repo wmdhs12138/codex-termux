@@ -101,7 +101,10 @@ grep -q 'Not logged in' work/login-status.txt
 FAKE_KEY='sk-fake-not-a-real-key-0000000000000000'
 printf '%s' "$FAKE_KEY" | "$CODEX" login --with-api-key >/dev/null
 "$CODEX" login status >work/login-status2.txt 2>&1
-grep -q 'Logged in' work/login-status2.txt
+cat work/login-status2.txt
+# Match the masked key, not the wording: 0.164.0 replaced "Logged in using an API key - <key>"
+# with "API key configured - <key>". The key is masked as its first 8 and last 5 characters.
+grep -qF "${FAKE_KEY:0:8}***${FAKE_KEY: -5}" work/login-status2.txt
 test -s "$CODEX_HOME/auth.json"
 
 # `codex exec` has to get through app-server startup, the state databases and
