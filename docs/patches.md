@@ -1,8 +1,10 @@
 # 补丁与 overlay
 
-本项目不拷贝 Codex 源码：构建时按 tag 拉取上游 `openai/codex`，依次打上 [`patches/`](../patches) 里的补丁，再用 [`overlay/`](../overlay) 覆盖 Code Mode 的 JS 引擎层。补丁是对上游文件的普通 `git diff`，针对上游 `rust-v0.164.0`。
+本项目不拷贝 Codex 源码：构建时按 tag 拉取上游 `openai/codex`，依次打上 [`patches/`](../patches) 里的补丁，再用 [`overlay/`](../overlay) 覆盖 Code Mode 的 JS 引擎层。补丁是对上游文件的普通 `git diff`，针对上游 `rust-v0.166.0`。
 
 补丁采用精确匹配：上游结构变化导致补丁不再适用时，构建会直接失败，而不是产出未验证的文件。
+
+`rust-v0.166.0` 的适配：上游的独立安装命令改成先下载完整再 `eval`，0009 随之更新上下文；`code-mode-runtime` 新增依赖 `codex-plugin-host`，0010 随之更新上下文；0016、0018 只是因此连带打不上，内容未变。新增的 UI 插件进程直接使用 V8，overlay 用一个报告不可用的入口替换了它的 `ui/mod.rs`（见下文）。工作区的 `[patch.crates-io]` 新增了 `v8` 的 git fork，由新增的 0021 去掉。
 
 `rust-v0.164.0` 的适配审阅了 `arg0` 测试上下文和控制 socket 的 `DaemonSocketFileGuard` 重命名。overlay 的哈希变化来自 V8 的 ICU 77 → 78 初始化接口，以及两项已删除的 V8 专用测试新增 `result_buffered_for` 字段；QuickJS 实现无需修改。
 
@@ -30,6 +32,7 @@
 | `0018-update-prompt-offers-recuts-on-android.patch` | 同一上游版本因补丁变化重新发布为 `vX.Y.Z-rN` 时版本号不变，0009 之后的启动更新检查只比较版本，所以从不提示，只有手动 `codex update`（安装器按二进制哈希判断）才会装上。补丁新增 `tui/src/termux_build.rs`：后台检查（每 20 小时一次）在最新 Release 正是当前版本时，把它的 `binary_sha256`、`host_sha256` 和正在运行的 `codex`、`codex-code-mode-host` 的大小、修改时间、SHA-256 记到 `~/.codex/termux-build.json`；启动时只 `stat` 这两个文件，构建不同就提示 `X.Y.Z → X.Y.Z (new build <哈希前 12 位>)`。提示带上构建哈希，「不再提醒」只忽略这一次构建；二进制在检查之后被替换（例如刚运行过 `codex update`）时不拿旧哈希比较，而是立刻重新检查。测试：`tests/test_update_prompt.sh`。 |
 | `0019-daemon-restore-deleted-socket-on-android.patch` | Termux 在 App 退出（关掉所有会话、被系统回收）时会清空 `$PREFIX/tmp`，0011 放在那里的控制 socket 和它的启动锁随之被删，而守护进程常常活下来：进程还在、还占着守护进程锁，socket 却没了。之后每次启动 `codex` 都连不上（`app-server-control.sock: No such file or directory`），`daemon start` 也起不了新的，最后报 `app server did not become ready`，只能手动 `daemon restart`。补丁让 Android 上的 accept 循环每 2 秒 `stat` 一次物理 socket：不在了就按启动时的顺序重建目录（0700）、重新拿启动锁、在同一路径上重新 `bind`（0600）；`~/.codex/app-server-control/` 下的软链被删了也补回来。客户端会给正在启动的服务最多 10 秒，所以 Termux 重启后第一次运行 `codex` 最多多等约 2 秒。连续失败只记一次日志。测试：`tests/test_daemon.sh`。 |
 | `0020-mxc-sandbox-without-mxc-sdk-on-android.patch` | 上游 `rust-v0.164.0` 新增的 `codex-mxc-sandbox`（Windows 的 MXC 沙箱）无条件依赖 `microsoft/mxc` 的 `mxc-sdk`。`mxc-sdk` 只为 Windows、Linux、macOS 编译 `mxc_engine::run`，`dispatch.rs` 却在所有平台上调用 `run::log_policy_hash`，Android 上编译失败（`cannot find run in mxc_engine`）。`codex-mxc-sandbox` 只在 Windows 和测试里用到 `mxc-sdk`，其他平台上的 `is_available`、`run_main` 等是不依赖它的空实现，所以补丁把这项依赖改成 `cfg(not(target_os = "android"))`：`Cargo.lock` 不变，其他平台和上游一致。 |
+| `0021-v8-from-crates-io-without-the-git-fork.patch` | 上游 `rust-v0.166.0` 在工作区的 `[patch.crates-io]` 里把 `v8` 换成 `seanh-oai/rusty_v8` 的 git 版本。这个构建不编译 V8（只剩不参与构建的 `codex-v8-poc` 还依赖它），但 Cargo 解析依赖时仍会克隆这个 fork 及其全部子模块（V8、ICU、libc++ 等，数 GB）。补丁删掉这一行，`codex-v8-poc` 像 `rust-v0.165.0` 及以前一样从 crates.io 解析同一个 `v8 152.2.0`：两者的依赖列表相同，`Cargo.lock` 里只是 `v8` 的来源变了。 |
 
 ## Code Mode 的 JS 引擎：overlay
 
@@ -39,4 +42,5 @@ Code Mode 让模型写一段 JavaScript 来编排工具调用，上游用 V8 执
 - **`exit()` 与终止**：和 V8 的 `TerminateExecution` 一样，`exit()` 与宿主终止都抛出 QuickJS 的不可捕获错误：跳过所有 `catch`/`finally`，排队的微任务和定时器不再执行，之后的 `store` 不生效。辅助函数转换参数时（getter、`toJSON` 等）调用了 `exit()` 也一样：转换中捕获到的错误不会被换成普通的可捕获错误，辅助函数也不再产生输出。
 - **验收**：上游自带的约 70 个运行时行为测试在 CI 里对 QuickJS 版本运行（跳过 2 个已知差异：只有 en-US 的区域数据），另有端到端测试：由假模型发出 9 次 `exec` 调用，检查文本输出、嵌套工具调用、`store`/`load`、`exit()`、定时器、运行时错误、嵌套的 `apply_patch`，以及 `Intl`、`toLocaleString`、`localeCompare`。
 - **`Intl`**：QuickJS 不带 ICU，所以 `runtime/intl.js` 自己实现了英语区域的 ECMA-402（范围和差异见 [limitations.md](limitations.md)）。`runtime/intl_lazy.js` 在每个 cell 里只放几个替身，第一次用到 `Intl` 或 `toLocaleString`、`localeCompare` 时才加载真正的实现（编译约 60 KB 的源码，每个 cell 都付是浪费，也会拖慢上游里按真实线程计时的测试）。货币、单位、相对时间、列表和时区名称的数据表由 `tests/intl/gen-data.mjs` 从完整 ICU 导出（`runtime/intl_data.json`）；时区由 Rust 一侧的 `runtime/intl.rs` 通过 jiff 提供。测试：`intl.rs` 里把约 1500 条表达式和完整 ICU 的结果逐条对照，另有加载时机、失败重试、本地时区一致性的测试；维护工具在 [`tests/intl/`](../tests/intl)。
+- **UI 插件进程**：上游 `rust-v0.166.0` 新增的 `ui/`（`codex-code-mode-host --codex-ui-plugin-process`）在 V8 isolate 里运行 UI 插件脚本，并要求开启 V8 的沙箱，QuickJS 两者都没有。overlay 只替换 `ui/mod.rs`：入口保留，调用时返回不可用的错误，目录里其余文件不参与编译。这个版本里只有上游的测试会启动该进程。
 - **漂移检测**：`overlay/UPSTREAM.sha256` 记录了被替换的上游文件的哈希，上游一旦改动这些文件，构建会失败并要求重新审阅，而不是悄悄忽略上游的改动。

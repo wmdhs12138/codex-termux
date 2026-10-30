@@ -57,7 +57,7 @@ index fbad7d9..c708f08 100644
  
  async fn fetch_homebrew_cask_version(client: &RouteAwareClientPool) -> Result<String, String> {
 diff --git a/codex-rs/tui/src/history_cell/notices.rs b/codex-rs/tui/src/history_cell/notices.rs
-index c5fa224..dd9f76b 100644
+index 9f5e213..573bb19 100644
 --- a/codex-rs/tui/src/history_cell/notices.rs
 +++ b/codex-rs/tui/src/history_cell/notices.rs
 @@ -8,6 +8,11 @@ use crate::wrapping::adaptive_wrap_line_to_width;
@@ -91,7 +91,7 @@ index c5fa224..dd9f76b 100644
      }
  
 diff --git a/codex-rs/tui/src/update_action.rs b/codex-rs/tui/src/update_action.rs
-index 860d0bd..adc3387 100644
+index 7b3433e..324466a 100644
 --- a/codex-rs/tui/src/update_action.rs
 +++ b/codex-rs/tui/src/update_action.rs
 @@ -5,6 +5,17 @@ use codex_install_context::InstallMethod;
@@ -100,7 +100,7 @@ index 860d0bd..adc3387 100644
  
 +const STANDALONE_UNIX_ARGS: &[&str] = &[
 +    "-c",
-+    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
++    r#"s=$(curl -fsSL https://chatgpt.com/codex/install.sh) && CODEX_NON_INTERACTIVE=1 eval "$s""#,
 +];
 +// codex-termux ships its own installer and Release assets; the official one downloads a musl
 +// build that does not run properly on Android.
@@ -131,7 +131,7 @@ index 860d0bd..adc3387 100644
 -                "sh",
 -                &[
 -                    "-c",
--                    "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh",
+-                    r#"s=$(curl -fsSL https://chatgpt.com/codex/install.sh) && CODEX_NON_INTERACTIVE=1 eval "$s""#,
 -                ],
 -            ),
 +            UpdateAction::StandaloneUnix => {
