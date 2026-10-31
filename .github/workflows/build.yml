@@ -4,7 +4,9 @@ name: build
 # publishes the built binary itself.
 #
 #   resolve -- picks the upstream version and the release tag; decides whether
-#              anything new needs to be released.
+#              anything new needs to be released, and whether the V8 that Code Mode
+#              links (rusty_v8 at the version upstream pins) is published yet.
+#   rusty_v8 -- only when it is not: rusty-v8.yml builds and publishes it.
 #   tests   -- static checks (shell syntax, patch hygiene), the offline installer
 #              scenarios and the release logic; the only job a pull request runs
 #              besides resolve.
@@ -52,6 +54,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       unreleased: ${{ steps.version.outputs.unreleased }}
+      rusty_v8: ${{ steps.rusty_v8.outputs.version }}
+      rusty_v8_missing: ${{ steps.rusty_v8.outputs.missing }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -102,6 +106,35 @@ jobs:
             echo "v$V is unreleased"
           fi
 
+      - name: Resolve the rusty_v8 archive
+        id: rusty_v8
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          PREFIX="$(jq -r .tag_prefix versions.json)"
+          UPSTREAM="$(jq -r .upstream versions.json)"
+          # Code Mode links V8 through the v8 crate, at the exact version upstream pins.
+          V8="$(gh api -H 'Accept: application/vnd.github.raw' \
+                  "repos/$UPSTREAM/contents/codex-rs/Cargo.toml?ref=$PREFIX$VERSION" |
+                sed -nE 's/^v8 = "=([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p')"
+          if [ -z "$V8" ]; then
+            echo "::error::no exact v8 pin in $UPSTREAM codex-rs/Cargo.toml at $PREFIX$VERSION"
+            exit 1
+          fi
+          echo "version=$V8" >> "$GITHUB_OUTPUT"
+          # The build number versions our recipe: a published tag can never be reused.
+          V8_TAG="rusty-v8-v$V8-b$(jq -r .rusty_v8_build versions.json)"
+          if gh release view "$V8_TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+               grep -qx SHA256SUMS; then
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+            echo "$V8_TAG is published"
+          else
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+            echo "$V8_TAG is not published yet; rusty-v8.yml builds it first"
+          fi
+
   tests:
     runs-on: ubuntu-latest
     steps:
@@ -124,11 +157,27 @@ jobs:
             grep -q '^diff --git a/' "$p" || { echo "::error::$p is not a git diff"; exit 1; }
           done
 
-  bionic:
-    needs: [resolve, tests]
+  rusty_v8:
+    needs: resolve
     if: >-
+      needs.resolve.outputs.rusty_v8_missing == 'true' &&
       github.event_name != 'pull_request' &&
       (github.event_name != 'schedule' || needs.resolve.outputs.unreleased == 'true')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/rusty-v8.yml
+    with:
+      version: ${{ needs.resolve.outputs.rusty_v8 }}
+
+  bionic:
+    needs: [resolve, tests, rusty_v8]
+    # rusty_v8 is skipped when the archive is already published.
+    if: >-
+      ${{ !cancelled() &&
+      needs.resolve.result == 'success' && needs.tests.result == 'success' &&
+      (needs.rusty_v8.result == 'success' || needs.rusty_v8.result == 'skipped') &&
+      github.event_name != 'pull_request' &&
+      (github.event_name != 'schedule' || needs.resolve.outputs.unreleased == 'true') }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
     env:
@@ -149,7 +198,7 @@ jobs:
           docker run --rm --privileged \
             -v "$GITHUB_WORKSPACE:/data/data/com.termux/files/home/codex-termux" \
             -w /data/data/com.termux/files/home/codex-termux \
-            "$TERMUX_DOCKER_IMAGE" bash .github/ci/bionic-build.sh "$CODEX_VERSION" "$TERMUX_DOCKER_IMAGE"
+            "$TERMUX_DOCKER_IMAGE" bash .github/ci/bionic-build.sh "$CODEX_VERSION" "$TERMUX_DOCKER_IMAGE" "$GITHUB_REPOSITORY"
 
       - name: Verify Bionic acceptance manifest
         env:
@@ -165,6 +214,8 @@ jobs:
           assert doc["ci_acceptance"]["architecture"] == "aarch64", doc
           assert doc["ci_acceptance"]["version_probe"] == "pass", doc
           assert doc["ci_acceptance"]["smoke"] == "pass", doc
+          assert doc["code_mode_engine"].startswith("V8 "), doc
+          assert len(doc["rusty_v8"]["archive_sha256"]) == 64, doc
           print(json.dumps(doc, indent=2))
           PY
 
@@ -194,9 +245,11 @@ jobs:
 
   release:
     needs: [resolve, bionic]
+    # Explicit results: a skipped rusty_v8 further up would otherwise skip this job too.
     if: >-
+      ${{ !cancelled() && needs.resolve.result == 'success' && needs.bionic.result == 'success' &&
       needs.resolve.outputs.unreleased == 'true' &&
-      (github.event_name != 'workflow_dispatch' || inputs.publish)
+      (github.event_name != 'workflow_dispatch' || inputs.publish) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

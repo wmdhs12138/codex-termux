@@ -3,7 +3,7 @@
 
 Together they cover what scripts rely on: text output, a nested tool call, store/load across
 calls, early exit(), timers, the text of a runtime error, nested apply_patch, and the locale
-APIs (Intl, toLocaleString, localeCompare) that QuickJS only has through the Intl overlay.
+APIs (Intl, toLocaleString, localeCompare).
 """
 import json
 import sys

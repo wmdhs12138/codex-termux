@@ -1,15 +1,17 @@
 # CI
 
-所有构建都在 GitHub Actions 上完成，不在手机上编译（完整 release 构建约一小时，峰值内存接近 13 GB）。工作流是 [`.github/workflows/build.yml`](../.github/workflows/build.yml)，Bionic 里的步骤在 [`.github/ci/bionic-build.sh`](../.github/ci/bionic-build.sh)。
+所有构建都在 GitHub Actions 上完成，不在手机上编译（完整 release 构建约一小时，峰值内存接近 13 GB）。工作流是 [`.github/workflows/build.yml`](../.github/workflows/build.yml)，Bionic 里的步骤在 [`.github/ci/bionic-build.sh`](../.github/ci/bionic-build.sh)；Code Mode 链接的 V8 由 [`.github/workflows/rusty-v8.yml`](../.github/workflows/rusty-v8.yml) 编译（见[下文](#v8-归档rusty-v8yml)）。
 
 ## 任务
 
 ```text
-resolve ── 决定上游版本和发布 tag，判断有没有新东西要发
+resolve ── 决定上游版本和发布 tag，判断有没有新东西要发；读出上游锁定的 v8 版本，
+   │       看对应的 rusty-v8-v<版本>-b<N> 是否已经发布
+rusty_v8 ─ 只在还没发布时运行：调用 rusty-v8.yml 编译并发布（约两小时）
 tests ──── 静态检查、安装器和发布逻辑的离线测试（ubuntu-latest，很快）
 bionic ─── ubuntu-24.04-arm + 固定的 termux-docker 镜像：
-   │       安装依赖 → 拉取上游 tag → 打补丁和 overlay → cargo build --release
-   │       → 上游 code-mode 运行时测试对 QuickJS 运行 → 在 Bionic 里真实执行（见下）
+   │       安装依赖 → 拉取上游 tag → 打补丁 → 下载并校验 V8 归档 → cargo build --release
+   │       → 上游 code-mode 运行时的全部测试 → 在 Bionic 里真实执行（见下）
 release ── 唯一有写权限的任务：发布 tarball、SHA-256 和 build-manifest.json；
            tag 钉在构建的提交上，只有最高版本成为 Latest，说明里列出变更
 ```
@@ -42,7 +44,23 @@ release ── 唯一有写权限的任务：发布 tarball、SHA-256 和 build-
 
 - 任务日志要等整个 run 结束才能看；失败时 `codex-termux-debug` artifact 里有构建输出，可以下载到手机上排查。
 - 脚本失败会打印 `FAILED: <脚本> line N: <命令> (exit rc)`。
-- 补丁不再适用或 overlay 里记录的上游文件哈希变了，构建会直接失败：这是有意的，说明上游改了被我们替换或修改的文件，需要重新审阅。
+- 补丁不再适用，构建会直接失败：这是有意的，说明上游改了被我们修改的文件，需要重新审阅。
+- `build: cannot download …/rusty-v8-v<版本>-b<N>/…`：这个版本的 V8 归档没有发布。正常情况下 `rusty_v8` 任务会先把它编出来；它失败了就看它的日志，修好后可以单独运行 `gh workflow run rusty-v8.yml -f version=<版本>`。
+
+## V8 归档（rusty-v8.yml）
+
+rusty_v8 没有 Android 的预编译归档，所以本项目自己编（原因和做法见 [patches.md](patches.md#code-mode-的-v8)）。`build.yml` 在上游换了 `v8` 版本时自动调用它，也可以手动运行：`gh workflow run rusty-v8.yml -f version=152.2.0`。
+
+```text
+build ──── ubuntu-24.04（x86_64，rusty_v8 只支持从 x86_64 Linux 交叉编译 Android）：
+   │       scripts/build-rusty-v8.sh，冷编译约两小时
+smoke ──── ubuntu-24.04-arm + termux-docker：用 Termux 的 Rust 和 clang 把归档链接进
+   │       tests/v8-smoke，开 JIT 和 --jitless 各跑一次
+publish ── 唯一有写权限的任务：发布 Release rusty-v8-v<版本>-b<N>，从不设为 Latest；
+           已经发布过的保留不动。N 是 versions.json 的 rusty_v8_build
+```
+
+编译缓存（sccache）存在 Actions 缓存里，失败的运行也会保存，修好后重跑只需编译没缓存的部分。缓存按分支隔离：在别的分支上第一次编译仍是冷编译。
 
 ## 固定的东西
 

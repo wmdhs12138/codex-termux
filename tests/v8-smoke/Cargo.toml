@@ -1,0 +1,14 @@
+[package]
+name = "v8-smoke"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Same pins and feature as upstream codex-rs (Cargo.toml, code-mode-runtime/Cargo.toml).
+# .github/ci/rusty-v8-smoke.sh replaces the v8 pin with the archive's version.
+v8 = { version = "=152.2.0", features = ["v8_enable_sandbox"] }
+deno_core_icudata = "=0.78.0"
+
+[profile.release]
+strip = true

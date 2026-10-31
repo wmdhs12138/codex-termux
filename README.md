@@ -36,7 +36,7 @@ codex update
 | 功能 | 状态 |
 | --- | --- |
 | 交互界面、`codex exec`、登录、`apply_patch`、网络搜索 | 可用，CI 里真实执行并检查 |
-| Code Mode（模型写 JavaScript 编排工具调用） | 可用，引擎是 QuickJS；`Intl`、`toLocaleString`、`localeCompare` 由自带实现补上（只有英语区域数据），没有 `Temporal`，详见 [限制](docs/limitations.md) |
+| Code Mode（模型写 JavaScript 编排工具调用） | 可用，引擎和官方一样是开启沙箱的 V8，带完整 ICU 和 `Temporal`；V8 由本项目为 Android 编译，见 [补丁说明](docs/patches.md#code-mode-的-v8) |
 | 共享后台服务、`codex agents` | 可用，和官方一样**默认开启**，[详情](docs/daemon-and-remote-control.md) |
 | 远程控制（ChatGPT 应用连到这台手机） | 可用，和官方一样**需要主动开启**并配对，[详情](docs/daemon-and-remote-control.md) |
 | 操作系统沙箱、`codex sandbox` | **不可用**（Android 内核限制，见下） |
@@ -67,7 +67,7 @@ codex update
 | --- | --- |
 | [docs/daemon-and-remote-control.md](docs/daemon-and-remote-control.md) | 共享后台服务与远程控制：开关、代价与实测数据、配对与目录信任 |
 | [docs/limitations.md](docs/limitations.md) | 已知限制、未实现的功能和可以补的办法 |
-| [docs/patches.md](docs/patches.md) | 每个补丁解决什么问题，以及 Code Mode 的 QuickJS overlay |
+| [docs/patches.md](docs/patches.md) | 每个补丁解决什么问题，以及 Code Mode 用的 Android 版 V8 |
 | [docs/ci.md](docs/ci.md) | CI 流水线，以及 Bionic 里真实执行的测试 |
 | [docs/maintaining.md](docs/maintaining.md) | 维护手册：跟进上游版本、改补丁、发版、踩过的坑 |
 | [tests/README.md](tests/README.md) | 各测试文件的作用 |
@@ -77,8 +77,10 @@ codex update
 不推荐在手机上构建：完整 release 构建约一小时，峰值内存接近 13 GB。如确有需要：
 
 ```bash
-pkg install rust clang cmake make git jq openssl liblzma pkg-config protobuf python
+pkg install rust clang cmake make git jq openssl liblzma pkg-config protobuf python curl
 VERSION=0.166.0 scripts/build.sh      # 产物在 dist/
 ```
+
+Code Mode 用的 V8 不在手机上编译：构建会从本项目的 Release（`rusty-v8-v*`）下载 CI 编好的归档并校验。
 
 第三方组件及许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。本项目与 OpenAI 无关联。

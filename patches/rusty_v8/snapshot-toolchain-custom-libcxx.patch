@@ -1,0 +1,25 @@
+From termux-packages (packages/deno/v8-patches/0003-compiler-use-custom-libcxx-for-v8.patch),
+which cross-builds the same crate for Termux: the V8 snapshot toolchain (mksnapshot and torque,
+built for the x86_64 host) uses Chromium's libc++ like the other host toolchains. Applied by
+scripts/build-rusty-v8.sh to the rusty_v8 checkout.
+
+--- a/build/config/c++/c++.gni
++++ b/build/config/c++/c++.gni
+@@ -6,6 +6,8 @@
+ import("//build/toolchain/rbe.gni")
+ import("//build_overrides/build.gni")
+ 
++import("//v8/gni/snapshot_toolchain.gni")
++
+ declare_args() {
+   # Use in-tree libc++ (buildtools/third_party/libc++ and
+   # buildtools/third_party/libc++abi) instead of the system C++ library for C++
+@@ -52,6 +54,8 @@
+ 
+ use_custom_libcxx =
+     use_custom_libcxx || (use_custom_libcxx_for_host && !is_a_target_toolchain)
++use_custom_libcxx =
++    use_custom_libcxx || (use_custom_libcxx_for_host && current_toolchain == v8_snapshot_toolchain)
+ 
+ declare_args() {
+   # WARNING: Setting this to a non-default value is highly discouraged.

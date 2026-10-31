@@ -7,10 +7,12 @@ trap 'rc=$?; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (ex
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-# bionic-build.sh VERSION IMAGE. Arguments, not `docker run -e`: the image's entrypoint
-# does not pass those variables to the command.
+# bionic-build.sh VERSION IMAGE [REPO]. Arguments, not `docker run -e`: the image's entrypoint
+# does not pass those variables to the command. REPO hosts the rusty-v8-v* releases build.sh
+# downloads (default: versions.json's repo).
 VERSION="${1:-}"
 IMAGE="${2:-unknown}"
+[ -z "${3:-}" ] || export CODEX_TERMUX_REPO="$3"
 echo "bionic-build: requested version='$VERSION'"
 [ -n "$VERSION" ] || { echo "bionic-build: no version was passed in" >&2; exit 1; }
 
@@ -57,19 +59,16 @@ VERSION="$VERSION" scripts/build.sh
 ACTUAL="$(python3 -c 'import json; print(json.load(open("dist/build-manifest.json"))["codex"])')"
 [ "$ACTUAL" = "$VERSION" ] || { echo "bionic-build: manifest says '$ACTUAL' but '$VERSION' was requested" >&2; exit 1; }
 
-echo "::group::Conformance: upstream's code-mode runtime tests on QuickJS"
-# The V8 runtime ships ~70 behaviour tests that go through the service API. Run them against
-# the QuickJS replacement. Two are expected to differ and are skipped by name: they format a
-# date in French, but only en-US has locale data here (the Intl overlay falls back to en-US, as
-# the specification prescribes for unsupported locales).
+echo "::group::Conformance: upstream's code-mode runtime tests on the Android V8"
+# All of them, on the rusty_v8 archive the binaries link: the behaviour tests that go through the
+# service API, the JIT and array-sort tests, the UI plugin sandbox's workers and transport, and
+# the check that the linked V8 has the sandbox.
 (
   export WORK="$ROOT/work"
   # shellcheck source=../../scripts/cargo-env.sh
   source "$ROOT/scripts/cargo-env.sh"
   cd "$WORK/codex/codex-rs"
-  cargo test --release -p codex-code-mode-runtime --message-format short -- \
-    --skip date_locale_string_formats_with_icu_data \
-    --skip intl_date_time_format_formats_with_icu_data
+  cargo test --release -p codex-code-mode-runtime --message-format short
 )
 echo "::endgroup::"
 
@@ -267,7 +266,7 @@ cat work/update.txt
 grep -q 'wmdhs12138/codex-termux/main/install.sh' work/update.txt
 grep -q 'Update ran successfully' work/update.txt
 
-# 5. Code Mode end to end. The QuickJS host runs real scripts: the fake model makes nine `exec`
+# 5. Code Mode end to end. The host runs real scripts on V8: the fake model makes nine `exec`
 # calls (text, a nested tool call, store/load across calls, exit(), timers, a runtime error,
 # nested apply_patch, Intl) and the checker looks at exactly what the model is sent back for each.
 E2E_CM="$ROOT/work/e2e-code-mode"; rm -rf "$E2E_CM"; mkdir -p "$E2E_CM/cwd"
@@ -304,7 +303,7 @@ bash "$ROOT/tests/test_daemon.sh" "$CODEX"
 echo "::endgroup::"
 
 # ...and the real thing: a client attaches to the control socket like the TUI does and runs a
-# Code Mode turn on the daemon's app-server (QuickJS host found next to codex, nested tools).
+# Code Mode turn on the daemon's app-server (host found next to codex, nested tools).
 echo "::group::Code Mode through the shared background server"
 bash "$ROOT/tests/test_daemon_session.sh" "$CODEX"
 echo "::endgroup::"

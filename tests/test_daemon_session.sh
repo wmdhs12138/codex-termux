@@ -6,7 +6,7 @@
 # The daemon is started from a CODEX_HOME whose config points at tests/mock_responses.py, then a
 # client (tests/daemon_session.py) attaches to the control socket the way the TUI does and runs
 # one turn: the fake model makes the same `exec` calls as the plain `codex exec` Code Mode test,
-# so the daemon's app-server must find codex-code-mode-host, run the scripts on QuickJS and
+# so the daemon's app-server must find codex-code-mode-host, run the scripts on V8 and
 # send the results back, and tests/check_code_mode.py checks them.
 #
 # DAEMON_TEST_SEED=1 links the managed package by hand, for a codex built before patch 0013.

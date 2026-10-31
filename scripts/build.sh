@@ -19,13 +19,13 @@ VERSION="${VERSION:-$(PYJ version)}"
 UPSTREAM="$(PYJ upstream)"
 TAG="$(PYJ tag_prefix)$VERSION"
 RUST_MIN="$(PYJ rust_min)"
+# Where the rusty-v8-v* releases are published.
+REPO="${CODEX_TERMUX_REPO:-$(PYJ repo)}"
 
 echo "::group::Preflight"
-for t in cargo rustc git clang cmake protoc python3 pkg-config tar sha256sum; do
+for t in cargo rustc git clang cmake protoc python3 pkg-config tar sha256sum curl; do
   command -v "$t" >/dev/null || { echo "build: missing tool: $t" >&2; exit 1; }
 done
-# shellcheck source=cargo-env.sh
-source "$ROOT/scripts/cargo-env.sh"
 
 RUSTC_VER="$(rustc --version | awk '{print $2}')"
 SORTED_RUST="$(printf '%s\n%s\n' "$RUST_MIN" "$RUSTC_VER" | sort -V)"
@@ -58,17 +58,29 @@ for p in "${PATCHES[@]}"; do
 done
 echo "::endgroup::"
 
-echo "::group::Apply the QuickJS overlay"
-# Replaces the V8 layer of code mode (rusty_v8 has no Android build). The overlay records the
-# sha256 of every upstream file it replaces or deletes: if upstream touched one of them the
-# port needs a fresh review, so stop instead of silently ignoring the change.
-(cd "$SRC" && sha256sum --check --quiet "$ROOT/overlay/UPSTREAM.sha256") || {
-  echo "build: upstream changed a file that overlay/ replaces; re-review overlay/ against it" >&2
-  exit 1
-}
-cp -R "$ROOT/overlay/codex-rs/." "$SRC/codex-rs/"
-while IFS= read -r f; do rm -f "$SRC/$f"; done < "$ROOT/overlay/DELETE"
-echo "overlay applied: $(find "$ROOT/overlay/codex-rs" -type f | wc -l) files replaced, $(wc -l < "$ROOT/overlay/DELETE") deleted"
+echo "::group::Code Mode's V8 (rusty_v8 archive)"
+# rusty_v8 publishes no Android archive. .github/workflows/rusty-v8.yml builds one for the exact
+# `v8` version upstream pins and publishes it as the release $V8_TAG; cargo-env.sh names the
+# release and the files, this downloads and verifies them once.
+unset V8_VERSION
+# shellcheck source=cargo-env.sh
+source "$ROOT/scripts/cargo-env.sh"
+[ -n "$V8_VERSION" ] || { echo "build: no exact v8 pin in codex-rs/Cargo.toml" >&2; exit 1; }
+if ! (cd "$V8_DIR" 2>/dev/null && sha256sum --check --quiet SHA256SUMS 2>/dev/null); then
+  V8_URL="https://github.com/$REPO/releases/download/$V8_TAG"
+  rm -rf "$V8_DIR"; mkdir -p "$V8_DIR"
+  for f in SHA256SUMS "${RUSTY_V8_ARCHIVE##*/}" "${RUSTY_V8_SRC_BINDING_PATH##*/}"; do
+    curl -fsSL --retry 3 -o "$V8_DIR/$f" "$V8_URL/$f" || {
+      echo "build: cannot download $V8_URL/$f; run the rusty-v8 workflow for $V8_VERSION" >&2
+      exit 1
+    }
+  done
+  (cd "$V8_DIR" && sha256sum --check SHA256SUMS)
+fi
+# Again, now that SHA256SUMS is there: it pins RUSTY_V8_ARCHIVE_SHA256.
+# shellcheck source=cargo-env.sh
+source "$ROOT/scripts/cargo-env.sh"
+echo "$V8_TAG, archive sha256 $RUSTY_V8_ARCHIVE_SHA256"
 echo "::endgroup::"
 
 echo "::group::cargo build --release"
@@ -78,7 +90,7 @@ cargo build --release -p codex-cli --bin codex -p codex-code-mode-host --bin cod
 echo "::endgroup::"
 
 # The tag's Cargo.lock carries stale 0.0.0 workspace stamps, so --locked cannot be used, and
-# the QuickJS dependency adds crates. Prove that no existing dependency changed version.
+# patch 0021 moves v8 from a git fork to crates.io. Prove that no dependency changed version.
 python3 - "$VERSION" <<'PY'
 import subprocess, sys, tomllib
 version = sys.argv[1]
@@ -96,12 +108,9 @@ def versions(doc):
 
 a, b = versions(orig), versions(new)
 # A version replaced by another one is an upgrade; pure additions or pure removals (a crate
-# that nothing uses any more) are expected. jiff-tzdb is exempt: patch 0016's tzdb-bundle-always
-# can need a newer one than upstream locks (there only for jiff-tzdb-platform on Windows/wasm),
-# and the crate is the IANA data alone.
-UPGRADE_OK = {"jiff-tzdb"}
+# that nothing uses any more) are expected.
 bumped = {n: (sorted(a[n] - b[n]), sorted(b[n] - a[n])) for n in a.keys() & b.keys()
-          if n not in UPGRADE_OK and a[n] - b[n] and b[n] - a[n]}
+          if a[n] - b[n] and b[n] - a[n]}
 added, removed = sorted(set(b) - set(a)), sorted(set(a) - set(b))
 print(f"Cargo.lock: {len(added)} crates added ({', '.join(added[:6])}...), "
       f"{len(removed)} dropped ({', '.join(removed) or '-'})")
@@ -120,6 +129,7 @@ cp "$DIST/pkg/codex" "$DIST/pkg/codex-code-mode-host" "$DIST/"
 (cd "$DIST" && sha256sum codex-termux-aarch64.tar.gz > codex-termux-aarch64.tar.gz.sha256)
 
 VERSION="$VERSION" TAG="$TAG" UPSTREAM_SHA="$UPSTREAM_SHA" RUSTC_VER="$RUSTC_VER" \
+V8_VERSION="$V8_VERSION" V8_TAG="$V8_TAG" V8_SHA256="$RUSTY_V8_ARCHIVE_SHA256" \
 ROOT="$ROOT" DIST="$DIST" python3 - <<'PY'
 import hashlib, json, os, pathlib, platform
 root, dist = pathlib.Path(os.environ["ROOT"]), pathlib.Path(os.environ["DIST"])
@@ -131,10 +141,10 @@ doc = {
     "rustc": os.environ["RUSTC_VER"],
     "target": "android-aarch64",
     "architecture": platform.machine(),
-    "code_mode_engine": "quickjs-ng (rquickjs 0.14.0)",
+    "code_mode_engine": f"V8 (rusty_v8 {os.environ['V8_VERSION']}, sandbox)",
+    "rusty_v8": {"version": os.environ["V8_VERSION"], "release": os.environ["V8_TAG"],
+                 "archive_sha256": os.environ["V8_SHA256"]},
     "patches": {p.name: sha(p) for p in sorted((root / "patches").glob("*.patch"))},
-    "overlay": {str(p.relative_to(root / "overlay")): sha(p)
-                for p in sorted((root / "overlay/codex-rs").rglob("*.rs"))},
     "binary_sha256": sha(dist / "codex"),
     "host_sha256": sha(dist / "codex-code-mode-host"),
     "tarball_sha256": sha(dist / "codex-termux-aarch64.tar.gz"),

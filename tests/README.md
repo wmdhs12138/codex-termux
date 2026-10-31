@@ -4,7 +4,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `test_ci.py` | 发布逻辑（`python3 -m unittest -v tests/test_ci.py`，CI 的 `tests` 任务运行）：在临时 git 仓库里用假的 `gh` 真实执行 workflow 的 resolve 和 release 步骤：新版本用 `vX.Y.Z`、`recut` 取下一个 `-rN`、tag 钉在构建的提交上、旧版本重发不抢 Latest、被占用的 tag 名自动顺延、说明里列出相对上一个 Release 的补丁变更。需要 bash、git、jq、python3。 |
+| `test_ci.py` | 发布逻辑（`python3 -m unittest -v tests/test_ci.py`，CI 的 `tests` 任务运行）：在临时 git 仓库里用假的 `gh` 真实执行 workflow 的 resolve 和 release 步骤：新版本用 `vX.Y.Z`、`recut` 取下一个 `-rN`、tag 钉在构建的提交上、旧版本重发不抢 Latest、被占用的 tag 名自动顺延、说明里列出相对上一个 Release 的补丁变更；以及 V8 归档：从上游 `Cargo.toml` 读出精确的 `v8` 版本、判断 `rusty-v8-v*` 是否已发布、发布时从不成为 Latest、已发布的不重复发布、`rusty-v8-v*` 不被当成 Codex 版本。需要 bash、git、jq、python3。 |
 | `test_install.sh` | `install.sh` 的离线场景（12 个）：全新安装、无变化不重复下载、缺宿主程序、哈希被改、降级、慢 `tar -t` 的回归，以及更新后重启运行中的守护进程的几种情形。只需 bash、tar、sha256sum、python3。 |
 | `test_daemon.sh <codex>` | 守护进程生命周期：自动链接、socket 路径长度、`/proc` 身份记录、不带远程控制、start / 复用 / version / restart / stop / bootstrap；以及补丁 0019：在守护进程运行时删掉 socket（只有它在用时删整个目录，模拟 Termux 清空 `$PREFIX/tmp`）和 `app-server-control.sock` 软链，它要在几秒内在原路径上恢复，且仍是同一个进程。 |
 | `test_daemon_session.sh <codex>` | 一个客户端经守护进程的控制 socket 跑完整的 Code Mode 会话，结果交给 `check_code_mode.py` 检查。 |
@@ -16,9 +16,9 @@
 | `daemon_session.py` | 上面会话测试用的最小客户端：标准库实现的 WebSocket over UDS + JSON-RPC（`initialize`、`thread/start`、`turn/start`，等到 `turn/completed`）。 |
 | `mock_responses.py` | 假的 OpenAI Responses API：记录每个请求到 `request-N.json`，并按脚本回答，让 `codex exec` 和守护进程不用网络和账号就能被测试。 |
 | `code_mode_script.py` / `check_code_mode.py` | Code Mode 的主测试：假模型发出多次 `exec`（文本、嵌套工具调用、`store`/`load`、`exit()`、定时器、运行时错误、工作区外 `apply_patch` 被拒、`Intl` 与 `toLocaleString`/`localeCompare`），检查模型收到的结果。 |
-| `intl/` | 维护 QuickJS 里 `Intl` 实现的工具（对拍、生成数据和期望值），需要带完整 ICU 的 Node，不进 CI；说明见 [intl/README.md](intl/README.md)。Rust 侧的测试在 `overlay/.../runtime/intl.rs`。 |
 | `code_mode_wait_script.py` / `check_code_mode_wait.py` | 超过让出时间的脚本：`exec` 先返回已有输出和 cell id，`wait` 取回剩下的部分。 |
 | `tool_names.py` | 打印一个请求里提供给模型的所有工具名（兼容 `additional_tools` 与 `namespace`）。 |
+| `v8-smoke/` | V8 归档发布前的冒烟程序：`rusty-v8.yml` 在 termux-docker 里用 Termux 自带的 Rust 和 clang 把归档链接进来，开 JIT 和 `--jitless` 各运行一次，检查沙箱已开启、完整 ICU（中文日期、德语货币、中文分词）、`Temporal`、WebAssembly、256 MB 的 `ArrayBuffer`，并打印沙箱占用的地址空间。`rusty-v8.yml` 的 `v8-smoke` artifact 里有编好的二进制，可以拷到手机上直接运行。 |
 
 `test_daemon*.sh` 的 `DAEMON_TEST_SEED=1` 用于补丁 0013 之前构建的 `codex`（没有自动链接，手动建好守护进程的 package）。
 

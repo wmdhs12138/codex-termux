@@ -38,7 +38,7 @@ assert fails["name"] == "fails" and fails["exit_code"] == 3, fails
 assert seven[0].startswith("Script completed") and seven[1:] == ["{}"], seven
 assert eight[0].startswith("Script failed"), eight
 assert any("patch rejected: writing outside of the project" in text for text in eight), eight
-# Intl and the locale-sensitive built-ins exist and agree with a full-ICU engine (V8 had them):
+# Intl and the locale-sensitive built-ins agree with full ICU (the expected values are Node's):
 # a named time zone, currency, a case-insensitive sort, a list, grouping, a zone abbreviation.
 assert nine[0].startswith("Script completed"), nine
 assert nine[1:] == ["Jan 1, 2025, 10:04 PM", "$1,234.50", "a,b,C", "a, b, and c", "1,234,567.891", "11:04 AM GMT+8"], nine
