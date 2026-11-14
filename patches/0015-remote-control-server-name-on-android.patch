@@ -1,8 +1,8 @@
 diff --git a/codex-rs/app-server-transport/src/transport/remote_control/controller.rs b/codex-rs/app-server-transport/src/transport/remote_control/controller.rs
-index e7fb3c3..b24a882 100644
+index fcf5b47..3bd2a63 100644
 --- a/codex-rs/app-server-transport/src/transport/remote_control/controller.rs
 +++ b/codex-rs/app-server-transport/src/transport/remote_control/controller.rs
-@@ -77,7 +77,7 @@ impl RemoteControl {
+@@ -78,7 +78,7 @@ impl RemoteControl {
          let desired_state_tx = Arc::new(desired_state_tx);
          let current_enrollment =
              Arc::new(RemoteControlEnrollmentState::new(/*enrollment*/ None));
@@ -11,7 +11,7 @@ index e7fb3c3..b24a882 100644
          let (status_tx, _) = watch::channel(RemoteControlStatusChangedNotification {
              status: if desired.is_enabled() {
                  RemoteControlConnectionStatus::Connecting
-@@ -288,7 +288,7 @@ pub async fn start_remote_control(
+@@ -289,7 +289,7 @@ pub async fn start_remote_control(
          };
      let (status, _) = watch::channel(RemoteControlStatusChangedNotification {
          status: RemoteControlConnectionStatus::Disabled,
@@ -70,12 +70,12 @@ index 02f9d9f..6231985 100644
  #[path = "host_device_tests.rs"]
  mod tests;
 diff --git a/codex-rs/app-server-transport/src/transport/remote_control/mod.rs b/codex-rs/app-server-transport/src/transport/remote_control/mod.rs
-index f08a694..a083d20 100644
+index 0c2c209..e473f8d 100644
 --- a/codex-rs/app-server-transport/src/transport/remote_control/mod.rs
 +++ b/codex-rs/app-server-transport/src/transport/remote_control/mod.rs
-@@ -45,7 +45,6 @@ use codex_app_server_protocol::RemoteControlPairingStatusResponse;
- use codex_app_server_protocol::RemoteControlStatusChangedNotification;
+@@ -47,7 +47,6 @@ use codex_features::RuntimeAuthMode;
  use codex_login::AuthManager;
+ use codex_runtime_agent_instance::RuntimeAuthSlot;
  use codex_state::StateRuntime;
 -use gethostname::gethostname;
  use std::error::Error;

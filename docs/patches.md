@@ -8,6 +8,8 @@
 
 `rust-v0.166.0` 的适配：上游的独立安装命令改成先下载完整再 `eval`，0009 随之更新上下文；0018 只是因此连带打不上，内容未变。工作区的 `[patch.crates-io]` 新增了 `v8` 的 git fork，由新增的 0021 去掉。
 
+`rust-v0.169.0` 的适配：`remote_control/mod.rs` 多了两行 `use`，0015 随之更新上下文；`v8` 的 git fork 从 `seanh-oai/rusty_v8` 换成 `openai-oss-forks/rusty_v8`（`90a65f8`，官方 152.2.0 加一个只改 `src/cppgc.rs` 的提交），0021 改为删掉新的那一行，内容未变。
+
 `rust-v0.164.0` 的适配审阅了 `arg0` 测试上下文和控制 socket 的 `DaemonSocketFileGuard` 重命名。
 
 编号说明：`0004`（Android 上默认关闭共享后台服务）已在补丁 0013 解决了它的前提之后撤掉；`0002`（给 `codex-chatgpt` 加 `recursion_limit = "256"`）在上游 `rust-v0.161.0` 自己加上了同样的一行之后撤掉；`0010`、`0016` 在换回 V8 时撤掉。编号不再复用。
@@ -32,7 +34,7 @@
 | `0018-update-prompt-offers-recuts-on-android.patch` | 同一上游版本因补丁变化重新发布为 `vX.Y.Z-rN` 时版本号不变，0009 之后的启动更新检查只比较版本，所以从不提示，只有手动 `codex update`（安装器按二进制哈希判断）才会装上。补丁新增 `tui/src/termux_build.rs`：后台检查（每 20 小时一次）在最新 Release 正是当前版本时，把它的 `binary_sha256`、`host_sha256` 和正在运行的 `codex`、`codex-code-mode-host` 的大小、修改时间、SHA-256 记到 `~/.codex/termux-build.json`；启动时只 `stat` 这两个文件，构建不同就提示 `X.Y.Z → X.Y.Z (new build <哈希前 12 位>)`。提示带上构建哈希，「不再提醒」只忽略这一次构建；二进制在检查之后被替换（例如刚运行过 `codex update`）时不拿旧哈希比较，而是立刻重新检查。测试：`tests/test_update_prompt.sh`。 |
 | `0019-daemon-restore-deleted-socket-on-android.patch` | Termux 在 App 退出（关掉所有会话、被系统回收）时会清空 `$PREFIX/tmp`，0011 放在那里的控制 socket 和它的启动锁随之被删，而守护进程常常活下来：进程还在、还占着守护进程锁，socket 却没了。之后每次启动 `codex` 都连不上（`app-server-control.sock: No such file or directory`），`daemon start` 也起不了新的，最后报 `app server did not become ready`，只能手动 `daemon restart`。补丁让 Android 上的 accept 循环每 2 秒 `stat` 一次物理 socket：不在了就按启动时的顺序重建目录（0700）、重新拿启动锁、在同一路径上重新 `bind`（0600）；`~/.codex/app-server-control/` 下的软链被删了也补回来。客户端会给正在启动的服务最多 10 秒，所以 Termux 重启后第一次运行 `codex` 最多多等约 2 秒。连续失败只记一次日志。测试：`tests/test_daemon.sh`。 |
 | `0020-mxc-sandbox-without-mxc-sdk-on-android.patch` | 上游 `rust-v0.164.0` 新增的 `codex-mxc-sandbox`（Windows 的 MXC 沙箱）无条件依赖 `microsoft/mxc` 的 `mxc-sdk`。`mxc-sdk` 只为 Windows、Linux、macOS 编译 `mxc_engine::run`，`dispatch.rs` 却在所有平台上调用 `run::log_policy_hash`，Android 上编译失败（`cannot find run in mxc_engine`）。`codex-mxc-sandbox` 只在 Windows 和测试里用到 `mxc-sdk`，其他平台上的 `is_available`、`run_main` 等是不依赖它的空实现，所以补丁把这项依赖改成 `cfg(not(target_os = "android"))`：`Cargo.lock` 不变，其他平台和上游一致。 |
-| `0021-v8-from-crates-io-without-the-git-fork.patch` | 上游 `rust-v0.166.0` 在工作区的 `[patch.crates-io]` 里把 `v8` 换成 `seanh-oai/rusty_v8` 的 git 版本。这个 fork 只比 crates.io 上的 152.2.0 多两个提交，都只改 `cppgc::Member` 在 Rust 一侧的内存布局，用到它的只有 `codex-v8-poc` 里标了 `#[ignore]` 的测试，Code Mode 不用 cppgc。但 Cargo 解析依赖时会克隆这个 fork 及其全部子模块（V8、ICU、libc++ 等，数 GB）。补丁删掉这一行，`v8` 像 `rust-v0.165.0` 及以前一样来自 crates.io：版本和依赖列表相同，链接的是同一个归档，`Cargo.lock` 里只是 `v8` 的来源变了。 |
+| `0021-v8-from-crates-io-without-the-git-fork.patch` | 上游 `rust-v0.166.0` 在工作区的 `[patch.crates-io]` 里把 `v8` 换成 git fork（起初是 `seanh-oai/rusty_v8`，`rust-v0.169.0` 起是 `openai-oss-forks/rusty_v8`）。这个 fork 只比 crates.io 上的 152.2.0 多一两个提交，都只改 `cppgc::Member` 在 Rust 一侧的内存布局，用到它的只有 `codex-v8-poc` 里标了 `#[ignore]` 的测试，Code Mode 不用 cppgc。但 Cargo 解析依赖时会克隆这个 fork 及其全部子模块（V8、ICU、libc++ 等，数 GB）。补丁删掉这一行，`v8` 像 `rust-v0.165.0` 及以前一样来自 crates.io：版本和依赖列表相同，链接的是同一个归档，`Cargo.lock` 里只是 `v8` 的来源变了。 |
 
 ## Code Mode 的 V8
 
