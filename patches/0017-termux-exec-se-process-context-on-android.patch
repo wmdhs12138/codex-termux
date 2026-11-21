@@ -103,9 +103,7 @@ diff --git a/codex-rs/protocol/src/shell_environment.rs b/codex-rs/protocol/src/
 index 0c6c515..fa438f5 100644
 --- a/codex-rs/protocol/src/shell_environment.rs
 +++ b/codex-rs/protocol/src/shell_environment.rs
-@@ -10,6 +10,10 @@ pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_
- pub const OPENAI_FEDERATION_RULE_ID_ENV_VAR: &str = "OPENAI_FEDERATION_RULE_ID";
- pub const OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR: &str = "OPENAI_IDENTITY_TOKEN_FILE";
+@@ -12,4 +12,8 @@
  pub const OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR: &str = "OPENAI_WORKLOAD_IDENTITY_CONTEXT";
 +/// Termux's SELinux context, which codex-arg0 exports at startup. termux-exec reads it in every
 +/// child Codex forks, before the exec, and without it falls back to stdio, which can deadlock
