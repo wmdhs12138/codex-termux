@@ -197,9 +197,10 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            work/cargo-home/registry/cache
             work/cargo-home/registry/index
+            work/cargo-home/registry/src
             work/cargo-home/git/db
+            work/cargo-home/git/checkouts
             work/target
           key: codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'scripts/cargo-env.sh') }}-${{ github.run_id }}
           restore-keys: |
@@ -224,8 +225,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo chmod -R a+rwX work/cargo-home work/target 2>/dev/null || true
+          # Keep registry/src and git/checkouts so Cargo fingerprints match restored mtimes;
+          # drop final binaries and test executables to stay well below the cache quota.
           rm -rf work/target/release/codex work/target/release/codex-code-mode-host \
-            work/target/release/incremental work/cargo-home/registry/src 2>/dev/null || true
+            work/target/release/incremental 2>/dev/null || true
           if [ -d work/target/release/deps ]; then
             find work/target/release/deps -maxdepth 1 -type f -executable ! -name '*.so' -delete 2>/dev/null || true
           fi
@@ -235,9 +238,10 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            work/cargo-home/registry/cache
             work/cargo-home/registry/index
+            work/cargo-home/registry/src
             work/cargo-home/git/db
+            work/cargo-home/git/checkouts
             work/target
           key: codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'scripts/cargo-env.sh') }}-${{ github.run_id }}
 

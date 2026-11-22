@@ -300,18 +300,22 @@ python3 "$ROOT/tests/check_code_mode_wait.py" "$ROOT/work/mock-code-mode-wait/ou
 # (workspace-write default), shell commands must get EPERM on AF_INET while AF_UNIX still works;
 # enabling sandbox_workspace_write.network_access or danger-full-access must restore AF_INET.
 E2E_NET="$ROOT/work/e2e-net-seccomp"; rm -rf "$E2E_NET"; mkdir -p "$E2E_NET/cwd"
-python3 - "$E2E_NET/script.json" <<'PY'
-import json, sys
-py = (
-    "import errno, socket; "
-    "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.close(); "
-    "try:\n"
-    "  t = socket.socket(socket.AF_INET, socket.SOCK_STREAM); t.close(); inet = 'allowed'\n"
-    "except OSError as e:\n"
-    "  inet = 'eperm' if e.errno == errno.EPERM else f'err:{e.errno}'\n"
-    "print(f'net-check inet={inet} unix=allowed')"
-)
-source = f"const r = await tools.exec_command({{cmd: {json.dumps('python3 -c ' + json.dumps(py))}}});\ntext(JSON.stringify(r));\n"
+cat > "$E2E_NET/probe.py" <<'PY'
+import errno, socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.close()
+try:
+    t = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    t.close()
+    inet = "allowed"
+except OSError as e:
+    inet = "eperm" if e.errno == errno.EPERM else f"err:{e.errno}"
+print(f"net-check inet={inet} unix=allowed")
+PY
+python3 - "$E2E_NET/script.json" "$E2E_NET/probe.py" <<'PY'
+import json, shlex, sys
+cmd = f"python3 {shlex.quote(sys.argv[2])}"
+source = f"const r = await tools.exec_command({{cmd: {json.dumps(cmd)}}});\ntext(JSON.stringify(r));\n"
 json.dump([[{"type": "custom_tool_call", "id": "ctc_1", "status": "completed", "call_id": "call_net1",
              "name": "exec", "input": source}]], open(sys.argv[1], "w"))
 PY
