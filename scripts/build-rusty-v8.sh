@@ -13,6 +13,7 @@
 # The Android fixups follow termux-packages' deno package (packages/deno/build.sh and
 # v8-patches/), which builds the same crate for Termux, and denoland/rusty_v8#2086.
 set -Eeuo pipefail
+# shellcheck disable=SC2154
 trap 'rc=$?; command -v sccache >/dev/null && sccache --show-stats; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

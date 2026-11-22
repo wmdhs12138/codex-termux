@@ -16,11 +16,11 @@
 ### 在 Android 上做了什么调整
 上游假设它运行在官方安装包的目录布局里，并把 socket 放在 `/tmp`。这里的对应处理（细节见 [patches.md](patches.md)）：
 
-- 0011：socket 目录改到 Termux 前缀下的 `tmp`，并把路径里的摘要截短，保证不超过 `sun_path` 的 107 字节；
+- 0011：socket 目录改到 Termux 前缀下的 `var/run`（不会被 Termux 退出时清空），并把路径里的摘要截短，保证不超过 `sun_path` 的 107 字节；
 - 0012、0014：进程身份和启动时间改读 `/proc/<pid>/stat`，不依赖 `ps`；
 - 0013：守护进程的「package」是两个符号链接 `~/.codex/packages/app-server-daemon/current → releases/android` 和 `releases/android/bin/codex → 正在运行的 codex`，因此守护进程运行的就是你装的这个二进制，不需要另外安装，也不多占 300 MB；
 - 0017：启动时导出 `TERMUX__SE_PROCESS_CONTEXT`。没有它，守护进程派生的子进程偶尔会在 exec 之前卡死在 termux-exec 里，并一直占着控制 socket；
-- 0019：Termux 退出时会清空 `$PREFIX/tmp`，守护进程活下来却丢了 socket。守护进程每 2 秒检查一次，socket 或 `app-server-control.sock` 软链不在了就在原路径上重新监听。
+- 0019：通过 Linux `inotify` 事件驱动监听控制 socket 和 `app-server-control.sock` 软链所在目录（平时零轮询、零唤醒）；一旦被外部删掉，立即在原路径上重新监听并补回软链（仅在 `inotify` 不可用或恢复失败时回退到 2 秒重试）。
 
 `codex update` 会运行 `install.sh`；装入了不同的二进制后，如果守护进程在运行，安装器会执行 `codex app-server daemon restart` 让它换上新版本（`CODEX_TERMUX_SKIP_DAEMON_RESTART=1` 可关闭）。上游的 `daemon update`（用官方安装器更新）和后台自动更新器不支持：官方安装器装的是官方的 Linux 二进制，不能在 Android 上运行。
 
@@ -76,6 +76,13 @@ trust_level = "trusted"
 
 ### 关闭
 `codex app-server daemon disable-remote-control`（持久化关闭并重启守护进程，不带远程控制）；`codex remote-control stop` 只停守护进程，不清除保存的开关。设备在账号里的登记不会因此被删除；如需移除，请在 ChatGPT 应用的设备列表里操作（这一步没有验证过）。
+
+### 后台保活与 Android 限制
+
+在 Android 上长期运行守护进程或 `codex remote-control` 时，系统省电机制可能会中断后台连接或杀死子进程：
+
+- **锁屏断网 / Doze**：需要持久在线（尤其是远程控制）时，先在 Termux 中执行 `termux-wake-lock` 获取唤醒锁，并在 Android 系统设置里把 Termux 的电池优化设为"不受限制"。不用时用 `termux-wake-unlock` 释放。
+- **Android 12+ Phantom Process Killer（虚幻进程限制）**：系统默认会限制单个应用的后台子进程总数（通常 32 个），守护进程 + Code Mode host + MCP 服务器 + 模型执行的 shell 子进程较多时可能被系统直接杀掉（`Signal 9`）。如频繁遇到，可在开发者选项中开启"停用子进程限制"（Disable child process restrictions）或通过 ADB 放宽 `max_phantom_processes`。
 
 ### 验证情况
 在真机上验证过：开启、配对、设备出现、应用里能开会话。**没有验证**：前台的 `codex remote-control`（不带子命令）是否同样需要配对；长时间运行的稳定性。这部分不在 CI 里测（需要账号，并会向后端登记设备）。

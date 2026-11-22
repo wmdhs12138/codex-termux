@@ -1,0 +1,233 @@
+diff --git a/codex-rs/tui/src/app/right_click_paste.rs b/codex-rs/tui/src/app/right_click_paste.rs
+index 2178ce2..3b32a4d 100644
+--- a/codex-rs/tui/src/app/right_click_paste.rs
++++ b/codex-rs/tui/src/app/right_click_paste.rs
+@@ -69,7 +69,6 @@ impl PasteEnvironment {
+         }
+         match mode {
+             RightClickPaste::Off => Ok(false),
+-            RightClickPaste::On if cfg!(target_os = "android") => Err("Unavailable on Android"),
+             RightClickPaste::On => Ok(true),
+             RightClickPaste::Auto => Ok(self.platform_default),
+         }
+diff --git a/codex-rs/tui/src/app/right_click_paste_tests.rs b/codex-rs/tui/src/app/right_click_paste_tests.rs
+index 284400a..a585dfd 100644
+--- a/codex-rs/tui/src/app/right_click_paste_tests.rs
++++ b/codex-rs/tui/src/app/right_click_paste_tests.rs
+@@ -13,11 +13,7 @@ fn policy_preserves_explicit_modes_and_terminal_ownership() {
+         "Auto cannot identify this WSL terminal; use On or your terminal's paste command";
+     const INLINE_UNAVAILABLE: &str =
+         "Unavailable in inline mode; use your terminal's paste command";
+-    let on = if cfg!(target_os = "android") {
+-        Err("Unavailable on Android")
+-    } else {
+-        Ok(true)
+-    };
++    let on = Ok(true);
+     for (platform_default, ssh, wsl, vscode, on_status, auto_status) in [
+         (true, false, false, Other, on, Ok(true)),
+         (false, false, false, Other, on, Ok(false)),
+diff --git a/codex-rs/tui/src/chatwidget/transcript_export.rs b/codex-rs/tui/src/chatwidget/transcript_export.rs
+index 8c58c46..140a433 100644
+--- a/codex-rs/tui/src/chatwidget/transcript_export.rs
++++ b/codex-rs/tui/src/chatwidget/transcript_export.rs
+@@ -19,7 +19,7 @@ impl ChatWidget {
+                 SelectionItem {
+                     name: "Copy to clipboard".to_string(),
+                     description: Some("Copy the complete Markdown transcript".to_string()),
+-                    is_disabled: cfg!(target_os = "android"),
++                    is_disabled: false,
+                     actions: vec![Box::new(|tx| {
+                         tx.send(AppEvent::ExportTranscript {
+                             destination: TranscriptExportDestination::Clipboard,
+diff --git a/codex-rs/tui/src/clipboard_copy.rs b/codex-rs/tui/src/clipboard_copy.rs
+index 03ce890..ccb881b 100644
+--- a/codex-rs/tui/src/clipboard_copy.rs
++++ b/codex-rs/tui/src/clipboard_copy.rs
+@@ -123,9 +123,7 @@ fn copy_to_clipboard(
+         }
+     };
+     #[cfg(target_os = "android")]
+-    let native_copy = |_text: &str, _html: Option<&str>| {
+-        Err("native clipboard unavailable on Android".to_string())
+-    };
++    let native_copy = |text: &str, _html: Option<&str>| termux_clipboard_copy(text);
+     // Decide before propagating setup success or failure: either result could otherwise
+     // start a native write or fallback long after the user abandoned this request.
+     begin_delivery()?;
+@@ -270,6 +268,74 @@ pub(crate) fn is_wsl_session() -> bool {
+     false
+ }
+ 
++#[cfg(target_os = "android")]
++fn termux_clipboard_copy(text: &str) -> Result<Option<ClipboardLease>, String> {
++    use std::io::Read;
++    use std::process::Command;
++    use std::process::Stdio;
++    use std::time::Duration;
++    use std::time::Instant;
++
++    let mut child = Command::new("termux-clipboard-set")
++        .stdin(Stdio::piped())
++        .stdout(Stdio::null())
++        .stderr(Stdio::piped())
++        .spawn()
++        .map_err(|err| {
++            if err.kind() == std::io::ErrorKind::NotFound {
++                "termux-clipboard-set not found (install Termux:API)".to_string()
++            } else {
++                format!("failed to start termux-clipboard-set: {err}")
++            }
++        })?;
++    let payload = text.as_bytes().to_vec();
++    let writer = child.stdin.take().map(|mut stdin| {
++        std::thread::spawn(move || {
++            let _ = stdin.write_all(&payload);
++        })
++    });
++    let deadline = Instant::now() + Duration::from_secs(5);
++    let status = loop {
++        match child.try_wait() {
++            Ok(Some(status)) => break status,
++            Ok(None) if Instant::now() >= deadline => {
++                let _ = child.kill();
++                let _ = child.wait();
++                if let Some(handle) = writer {
++                    let _ = handle.join();
++                }
++                return Err("termux-clipboard-set timed out".to_string());
++            }
++            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
++            Err(err) => {
++                let _ = child.kill();
++                let _ = child.wait();
++                if let Some(handle) = writer {
++                    let _ = handle.join();
++                }
++                return Err(format!("termux-clipboard-set wait failed: {err}"));
++            }
++        }
++    };
++    if let Some(handle) = writer {
++        let _ = handle.join();
++    }
++    if status.success() {
++        Ok(None)
++    } else {
++        let mut stderr = String::new();
++        if let Some(mut pipe) = child.stderr.take() {
++            let _ = pipe.read_to_string(&mut stderr);
++        }
++        let detail = stderr.trim();
++        if detail.is_empty() {
++            Err(format!("termux-clipboard-set exited with {status}"))
++        } else {
++            Err(format!("termux-clipboard-set failed: {detail}"))
++        }
++    }
++}
++
+ /// Write to the native clipboard. The TUI owns any process-wide stderr redirection.
+ #[cfg(not(target_os = "android"))]
+ fn arboard_copy(
+diff --git a/codex-rs/tui/src/clipboard_paste/text.rs b/codex-rs/tui/src/clipboard_paste/text.rs
+index 17eee61..007f94e 100644
+--- a/codex-rs/tui/src/clipboard_paste/text.rs
++++ b/codex-rs/tui/src/clipboard_paste/text.rs
+@@ -78,7 +78,7 @@ pub(crate) fn reader() -> impl FnMut(Instant) -> Result<String, String> {
+         }
+         #[cfg(target_os = "android")]
+         {
+-            validate(String::new(), deadline)
++            termux_clipboard_read(deadline)
+         }
+     }
+ }
+@@ -96,6 +96,74 @@ pub(crate) fn native_result(
+     validate(text, deadline)
+ }
+ 
++#[cfg(target_os = "android")]
++fn termux_clipboard_read(deadline: Instant) -> Result<String, String> {
++    use std::io::Read;
++    use std::process::Command;
++    use std::process::Stdio;
++    use std::time::Duration;
++
++    let mut child = Command::new("termux-clipboard-get")
++        .stdin(Stdio::null())
++        .stdout(Stdio::piped())
++        .stderr(Stdio::null())
++        .spawn()
++        .map_err(|err| {
++            if err.kind() == std::io::ErrorKind::NotFound {
++                "clipboard text is unavailable (install Termux:API)".to_string()
++            } else {
++                format!("failed to start termux-clipboard-get: {err}")
++            }
++        })?;
++    let max_bytes = MAX_USER_INPUT_TEXT_CHARS * 4 + 1;
++    let reader = child.stdout.take().map(|stdout| {
++        std::thread::spawn(move || -> Result<Vec<u8>, String> {
++            let mut bytes = Vec::new();
++            stdout
++                .take(max_bytes as u64)
++                .read_to_end(&mut bytes)
++                .map_err(|_| "could not read clipboard text".to_string())?;
++            Ok(bytes)
++        })
++    });
++    let status = loop {
++        match child.try_wait() {
++            Ok(Some(status)) => break status,
++            Ok(None) if Instant::now() >= deadline => {
++                let _ = child.kill();
++                let _ = child.wait();
++                if let Some(handle) = reader {
++                    let _ = handle.join();
++                }
++                return Err("clipboard read timed out".into());
++            }
++            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
++            Err(_) => {
++                let _ = child.kill();
++                let _ = child.wait();
++                if let Some(handle) = reader {
++                    let _ = handle.join();
++                }
++                return Err("could not read clipboard text".into());
++            }
++        }
++    };
++    let bytes = match reader {
++        Some(handle) => handle
++            .join()
++            .map_err(|_| "could not read clipboard text".to_string())??,
++        None => Vec::new(),
++    };
++    if !status.success() {
++        return Err("clipboard text is unavailable".into());
++    }
++    if bytes.len() >= max_bytes {
++        return Err("clipboard text exceeds the message size limit".into());
++    }
++    let text = String::from_utf8(bytes).map_err(|_| "clipboard text is not UTF-8")?;
++    validate(text, deadline)
++}
++
+ fn validate(text: String, deadline: Instant) -> Result<String, String> {
+     if Instant::now() >= deadline {
+         Err("clipboard read timed out".into())
+diff --git a/codex-rs/tui/src/slash_command.rs b/codex-rs/tui/src/slash_command.rs
+index 443f26d..9984e5a 100644
+--- a/codex-rs/tui/src/slash_command.rs
++++ b/codex-rs/tui/src/slash_command.rs
+@@ -323,7 +323,7 @@ impl SlashCommand {
+ 
+     fn is_visible(self) -> bool {
+         match self {
+-            SlashCommand::Copy => !cfg!(target_os = "android"),
++            SlashCommand::Copy => true,
+             SlashCommand::App => cfg!(any(target_os = "macos", target_os = "windows")),
+             SlashCommand::Voice => true,
+             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),

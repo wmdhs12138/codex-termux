@@ -81,23 +81,42 @@ echo "5) an older release without a host: the stale host is removed"
 run_install "$T/old" >/dev/null
 expect_files "codex" "downgrade"
 
-echo "6) regression: a slow 'tar -t' must not make the host look absent"
-# The real tarball starts with a ~300 MB binary, so listing its members is slow. With
-# `set -o pipefail`, `tar -t | grep -q` then fails with SIGPIPE once grep has matched and
-# exited while tar is still writing, and the installer deleted the host instead of
-# installing it. Emulate the slowness deterministically with a tar that lists lazily.
+echo "6) regression: extraction invokes tar only once (no tar -tzf SIGPIPE)"
 mkdir -p "$T/shim"
+TAR_CALLS="$T/tar-calls.log"
+: > "$TAR_CALLS"
 cat > "$T/shim/tar" <<SHIM
-#!/usr/bin/env bash
-case " \$* " in
-  *" -tzf "*) "$REAL_TAR" "\$@" | while IFS= read -r line; do printf '%s\n' "\$line"; sleep 0.3; done ;;
-  *) exec "$REAL_TAR" "\$@" ;;
-esac
+#!$BASH
+printf '%s\n' "\$*" >> "$TAR_CALLS"
+exec "$REAL_TAR" "\$@"
 SHIM
 chmod +x "$T/shim/tar"
 echo "stale-host" > "$T/bin/codex-code-mode-host"
 run_install "$T/new" "$T/shim" >/dev/null
-[ "$("$T/bin/codex-code-mode-host")" = "host new" ] || fail "slow tar listing: the host was dropped or not updated"
+[ "$("$T/bin/codex-code-mode-host")" = "host new" ] || fail "single-pass extract: the host was dropped or not updated"
+[ "$(wc -l < "$TAR_CALLS")" -eq 1 ] || fail "expected 1 tar invocation, got $(wc -l < "$TAR_CALLS"): $(cat "$TAR_CALLS")"
+
+echo "6b) runtime deps: skip pkg install when dpkg already has openssl and liblzma"
+mkdir -p "$T/deps-shim"
+PKG_LOG="$T/pkg.log"
+cat > "$T/deps-shim/pkg" <<SHIM
+#!$BASH
+printf '%s\n' "\$*" >> "$PKG_LOG"
+SHIM
+cat > "$T/deps-shim/dpkg" <<SHIM
+#!$BASH
+exit "\${FAKE_DPKG_RC:-0}"
+SHIM
+chmod +x "$T/deps-shim/pkg" "$T/deps-shim/dpkg"
+: > "$PKG_LOG"
+CODEX_TERMUX_ALLOW_UNSUPPORTED=1 CODEX_TERMUX_BASE_URL="file://$T/old" \
+  CODEX_TERMUX_INSTALL_DIR="$T/bin" PATH="$T/deps-shim:$PATH" FAKE_DPKG_RC=0 \
+  bash "$ROOT/install.sh" >/dev/null 2>&1
+[ ! -s "$PKG_LOG" ] || fail "pkg install ran even though dpkg reported deps installed: $(cat "$PKG_LOG")"
+CODEX_TERMUX_ALLOW_UNSUPPORTED=1 CODEX_TERMUX_BASE_URL="file://$T/new" \
+  CODEX_TERMUX_INSTALL_DIR="$T/bin" PATH="$T/deps-shim:$PATH" FAKE_DPKG_RC=1 \
+  bash "$ROOT/install.sh" >/dev/null 2>&1
+grep -q 'install -y openssl liblzma' "$PKG_LOG" || fail "pkg install did not run when deps were missing"
 
 echo "7) a running shared server is restarted onto the new release"
 export STUB_LOG="$T/daemon.log"; : > "$STUB_LOG"

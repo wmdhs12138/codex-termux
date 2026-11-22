@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/instal
 安装指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/install.sh | VERSION=0.160.0 bash
+curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/install.sh | VERSION=0.171.0 bash
 ```
 
 ## 更新
@@ -39,8 +39,10 @@ codex update
 | Code Mode（模型写 JavaScript 编排工具调用） | 可用，引擎和官方一样是开启沙箱的 V8，带完整 ICU 和 `Temporal`；V8 由本项目为 Android 编译，见 [补丁说明](docs/patches.md#code-mode-的-v8) |
 | 共享后台服务、`codex agents` | 可用，和官方一样**默认开启**，[详情](docs/daemon-and-remote-control.md) |
 | 远程控制（ChatGPT 应用连到这台手机） | 可用，和官方一样**需要主动开启**并配对，[详情](docs/daemon-and-remote-control.md) |
-| 操作系统沙箱、`codex sandbox` | **不可用**（Android 内核限制，见下） |
-| 语音和实时对话、剪贴板图片粘贴、`/copy` | 不可用（音频依赖不支持 Android；剪贴板上游在 Android 上关闭） |
+| 操作系统沙箱、`codex sandbox` | **不可用**（Android 内核限制，见下；`codex doctor` 也会明确提示） |
+| 剪贴板文字复制/粘贴（`/copy`、导出到剪贴板、右键粘贴） | 可用（需安装 Termux:API 的 `termux-clipboard-set` / `termux-clipboard-get`；未安装时复制自动回退到 OSC 52） |
+| 后台任务/审批通知 | 可用（安装 Termux:API 时自动走 `termux-notification`，未安装时回退到终端铃声） |
+| 语音和实时对话、剪贴板图片粘贴 | 不可用（音频依赖不支持 Android；图片粘贴上游在 Android 上关闭） |
 | 系统钥匙串 | 不可用，凭据存在 `$CODEX_HOME/auth.json` |
 | `daemon update`、守护进程的自动更新器 | 不支持，更新走 `codex update` |
 
@@ -77,8 +79,8 @@ codex update
 不推荐在手机上构建：完整 release 构建约一小时，峰值内存接近 13 GB。如确有需要：
 
 ```bash
-pkg install rust clang cmake make git jq openssl liblzma pkg-config protobuf python curl
-VERSION=0.166.0 scripts/build.sh      # 产物在 dist/
+pkg install rust clang lld cmake make git jq openssl liblzma pkg-config protobuf python curl
+VERSION=0.171.0 scripts/build.sh      # 产物在 dist/
 ```
 
 Code Mode 用的 V8 不在手机上编译：构建会从本项目的 Release（`rusty-v8-v*`）下载 CI 编好的归档并校验。

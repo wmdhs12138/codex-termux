@@ -106,7 +106,7 @@ index 7b3433e..324466a 100644
 +// build that does not run properly on Android.
 +const TERMUX_INSTALL_ARGS: &[&str] = &[
 +    "-c",
-+    "curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/install.sh | bash",
++    r#"s=$(curl -fsSL https://raw.githubusercontent.com/wmdhs12138/codex-termux/main/install.sh) && eval "$s""#,
 +];
 +
  /// Update action the CLI should perform after the TUI exits.

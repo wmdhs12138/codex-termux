@@ -160,6 +160,12 @@ elif args[:2] == ["release", "view"]:
         self.assertNotEqual(proc.returncode, 0)
         self.assertNotIn("version", out)
 
+    def test_inline_table_v8_pin_is_accepted(self):
+        cargo = '[workspace.dependencies]\nv8 = { version = "=152.2.0", features = ["v8_enable_sandbox"] }\n'
+        proc, out, _ = self.resolve(cargo, ["SHA256SUMS"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(out, {"version": "152.2.0", "missing": "false"})
+
 
 class RustyV8PublishTests(unittest.TestCase):
     """rusty-v8.yml's publish step against a fake gh."""

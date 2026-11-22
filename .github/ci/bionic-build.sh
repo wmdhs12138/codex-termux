@@ -41,7 +41,7 @@ pkg upgrade -y "${apt_options[@]}"
 # retry after a fresh index instead of failing the whole build.
 for attempt in 1 2 3; do
   if pkg install -y "${apt_options[@]}" \
-       rust clang cmake make binutils coreutils curl git jq openssl liblzma pkg-config \
+       rust clang lld cmake make binutils coreutils curl git jq openssl liblzma pkg-config \
        protobuf python tar sed gawk util-linux; then
     break
   fi
@@ -54,6 +54,7 @@ echo "::endgroup::"
 
 cd "$ROOT"
 mkdir -p work
+export CARGO_HOME="${CARGO_HOME:-$ROOT/work/cargo-home}"
 VERSION="$VERSION" scripts/build.sh
 
 ACTUAL="$(python3 -c 'import json; print(json.load(open("dist/build-manifest.json"))["codex"])')"

@@ -14,6 +14,7 @@
 # Outside Android's SELinux (termux-docker on a Linux host, where /proc/self/attr/current holds
 # an AppArmor label) nothing may be exported: termux-exec would warn about it on every exec.
 set -Eeuo pipefail
+# shellcheck disable=SC2154
 trap 'rc=$?; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 CODEX="$(readlink -f "$1")"
@@ -34,7 +35,7 @@ try:
     raw = open("/proc/self/attr/current", "rb").read().decode().rstrip("\0\n")
 except OSError:
     raw = ""
-print(raw if re.fullmatch(r"u:r:[^\n :]+:s0(:c[0-9]+,c[0-9]+(,c[0-9]+,c[0-9]+)?)?", raw) else "")
+print(raw if re.fullmatch(r"u:r:[^\n\t\r :]+:s0(:c[0-9]+,c[0-9]+(,c[0-9]+,c[0-9]+)?)?", raw) else "")
 PY
 )"
 echo "expected context: '${EXPECTED}'"

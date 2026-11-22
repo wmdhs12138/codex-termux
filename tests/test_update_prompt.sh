@@ -24,6 +24,7 @@ fail() { echo "update prompt test: $*" >&2; exit 1; }
 cleanup() {
   for home in "$W"/*/home; do CODEX_HOME="$home" "$CODEX" app-server daemon stop >/dev/null 2>&1 || true; done
 }
+# shellcheck disable=SC2154
 trap 'rc=$?; cleanup; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 # cache <name> <latest build sha256> [stale] [dismissed label]: a CODEX_HOME whose update check

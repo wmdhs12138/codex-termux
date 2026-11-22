@@ -1,0 +1,45 @@
+diff --git a/codex-rs/cli/src/doctor/output.rs b/codex-rs/cli/src/doctor/output.rs
+index 5445484..5b3f608 100644
+--- a/codex-rs/cli/src/doctor/output.rs
++++ b/codex-rs/cli/src/doctor/output.rs
+@@ -762,7 +762,15 @@ fn sandbox_summary(check: &DoctorCheck) -> String {
+     let approval = detail::detail_value(check, "approval policy");
+     let filesystem = detail::detail_value(check, "filesystem sandbox");
+     let network = detail::detail_value(check, "network sandbox");
++    let platform = detail::detail_value(check, "platform sandbox");
+     match (approval, filesystem, network) {
++        (Some(approval), Some(filesystem), Some(network))
++            if platform.as_deref() == Some("unavailable (Android kernel)") =>
++        {
++            format!(
++                "unavailable on Android ({filesystem} fs + {network} network not enforced) · approval {approval}"
++            )
++        }
+         (Some(approval), Some(filesystem), Some(network)) => {
+             format!("{filesystem} fs + {network} network · approval {approval}")
+         }
+diff --git a/codex-rs/cli/src/doctor/sandbox.rs b/codex-rs/cli/src/doctor/sandbox.rs
+index 4e1d54b..f464ff6 100644
+--- a/codex-rs/cli/src/doctor/sandbox.rs
++++ b/codex-rs/cli/src/doctor/sandbox.rs
+@@ -110,6 +110,20 @@ pub(super) fn sandbox_check(config: &Config, arg0_paths: &Arg0DispatchPaths) ->
+         summary = "Linux sandbox helper path does not exist".to_string();
+     }
+ 
++    #[cfg(target_os = "android")]
++    {
++        details.push("platform sandbox: unavailable (Android kernel)".to_string());
++        details.push(
++            "shell enforcement: none (policies are advisory; only apply_patch checks writable roots)"
++                .to_string(),
++        );
++        if status == CheckStatus::Ok {
++            status = CheckStatus::Warning;
++            summary = "OS sandbox unavailable on Android (shell commands are not sandboxed)"
++                .to_string();
++        }
++    }
++
+     let check = DoctorCheck::new("sandbox.helpers", "sandbox", status, summary).details(details);
+ 
+     #[cfg(target_os = "windows")]

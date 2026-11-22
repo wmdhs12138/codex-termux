@@ -8,6 +8,7 @@
 # (add, install, list, remove), the session commands (`exec resume`, `archive`, `unarchive`,
 # `delete`), `migrate-rollouts`, `features enable/disable` and `completion`.
 set -Eeuo pipefail
+# shellcheck disable=SC2154
 trap 'rc=$?; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 CODEX="$(readlink -f "$1")"

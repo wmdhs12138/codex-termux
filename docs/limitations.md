@@ -1,19 +1,25 @@
 # 已知限制与未实现的功能
 
-对照上游 `rust-v0.160.0` 的源码，并在一台 Android 16、内核 5.15 的手机上实测。
+对照上游 `rust-v0.171.0` 的源码，并在一台 Android 16、内核 5.15 的手机上实测。
 
 ## 做不了（Android 内核或平台限制）
 
-- **没有操作系统沙箱。** 在测试手机上：Landlock 系统调用返回 `ENOSYS`（内核没有实现），`unshare(CLONE_NEWUSER)` 返回 `EINVAL`（所以上游用的 bubblewrap 不可能运行），进程本身已被 zygote 的 seccomp 过滤器约束。`codex sandbox` 会报"当前系统不支持"。`workspace-write`、`network_access = false` 等设置对 shell 命令**不会被强制执行**，命令以当前 Termux 用户的权限运行；只有 `apply_patch` 会在进程内检查目标路径是否在可写范围内。审批提示属于应用层逻辑，没有改动：需要把关时用 `approval_policy = "untrusted"`。
+- **没有操作系统沙箱。** 在测试手机上：Landlock 系统调用返回 `ENOSYS`（内核没有实现），`unshare(CLONE_NEWUSER)` 返回 `EINVAL`（所以上游用的 bubblewrap 不可能运行），进程本身已被 zygote 的 seccomp 过滤器约束。`codex sandbox` 会报"当前系统不支持"，`codex doctor` 也会把沙箱状态标为 Android 不可用（未强制执行）。`workspace-write`、`network_access = false` 等设置对 shell 命令**不会被强制执行**，命令以当前 Termux 用户的权限运行；只有 `apply_patch` 会在进程内检查目标路径是否在可写范围内。审批提示属于应用层逻辑，没有改动：需要把关时用 `approval_policy = "untrusted"`。
 - **语音和实时对话。** 音频相关的 crate 只为 macOS、linux-gnu、Windows 构建；TUI 里 `/voice` 会提示无法识别。
 - **剪贴板图片粘贴。** 上游自己在 Android 上就关掉了。
 - **凭据存在 `$CODEX_HOME/auth.json`。** Android 上没有系统钥匙串，上游的 `keyring` 在这里没有后端。
+
+## 已用 Termux:API 补齐的可选能力
+
+以下功能需要同时安装 Termux:API 应用和 Termux 包（`pkg install termux-api`）；未安装时不影响主流程，会自动降级：
+
+- **剪贴板文字复制与粘贴（补丁 0022）**：`/copy`、导出对话到剪贴板、右键粘贴已重新启用，底层调用 `termux-clipboard-set` / `termux-clipboard-get`；未装 Termux:API 时复制自动回退到 OSC 52。
+- **后台完成/审批通知（补丁 0024）**：通知方式为 `auto`（默认）且检测到 `termux-notification` 时，自动通过 Android 系统通知提醒任务完成或等待审批；未装时回退到终端 BEL。
 
 ## 缺失，但有办法补
 
 | 功能 | 现状 | 办法 |
 | --- | --- | --- |
-| 剪贴板文字复制 | 上游在 Android 上隐藏了 `/copy`、"导出对话到剪贴板"和右键粘贴，复制只剩 OSC 52 | 用 Termux:API 的 `termux-clipboard-set` / `termux-clipboard-get` 补上；需要用户装 Termux:API |
 | 对 shell 命令强制禁网 | `network_access = false` 只是配置 | 用 seccomp-bpf 过滤网络相关系统调用；只覆盖网络，覆盖不了文件系统 |
 
 文件系统隔离只能靠 ptrace 或 seccomp 通知这类折中办法，实现复杂，也不严格，目前不打算做。
@@ -33,4 +39,4 @@
 - `cloud list`（在真实账号上只读调用成功，当时账号里没有云任务）。
 - `features list / enable / disable`、`completion`、`debug models` / `prompt-input`、`exec-server`（监听并完成 WebSocket 握手）、`app-server generate-json-schema`。
 
-**没验证**：`mcp login` / `logout`（需要 OAuth 服务器）、`cloud exec` / `status` / `diff` / `apply` 和 `apply`（账号里没有云任务）、从 Git 或远程市场安装插件（需要网络源）、`exec-server forward`、IDE 上下文通信、桌面通知。
+**没验证**：`mcp login` / `logout`（需要 OAuth 服务器）、`cloud exec` / `status` / `diff` / `apply` 和 `apply`（账号里没有云任务）、从 Git 或远程市场安装插件（需要网络源）、`exec-server forward`、IDE 上下文通信。

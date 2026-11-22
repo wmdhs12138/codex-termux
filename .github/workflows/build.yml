@@ -19,6 +19,10 @@ name: build
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - 'LICENSE'
   pull_request:
   workflow_dispatch:
     inputs:
@@ -44,8 +48,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: codex-termux-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: codex-termux-${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   resolve:
@@ -118,7 +122,7 @@ jobs:
           # Code Mode links V8 through the v8 crate, at the exact version upstream pins.
           V8="$(gh api -H 'Accept: application/vnd.github.raw' \
                   "repos/$UPSTREAM/contents/codex-rs/Cargo.toml?ref=$PREFIX$VERSION" |
-                sed -nE 's/^v8 = "=([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p')"
+                python3 -c 'import re, sys, tomllib; doc = tomllib.loads(sys.stdin.read()); deps = doc.get("workspace", {}).get("dependencies", {}) or doc.get("dependencies", {}); spec = (deps.get("v8") if isinstance(deps, dict) else None) or doc.get("v8"); ver = spec if isinstance(spec, str) else (spec.get("version", "") if isinstance(spec, dict) else ""); m = re.fullmatch(r"=([0-9]+\.[0-9]+\.[0-9]+)", ver); print(m.group(1) if m else "")')"
           if [ -z "$V8" ]; then
             echo "::error::no exact v8 pin in $UPSTREAM codex-rs/Cargo.toml at $PREFIX$VERSION"
             exit 1
@@ -151,6 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           for f in scripts/*.sh .github/ci/*.sh tests/*.sh install.sh; do bash -n "$f"; done
+          shellcheck -x -S warning scripts/*.sh .github/ci/*.sh tests/*.sh install.sh
           jq -e . versions.json >/dev/null
           # Patches must be plain unified diffs with a/ b/ prefixes.
           for p in patches/*.patch; do
@@ -188,6 +193,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Restore Cargo build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            work/cargo-home/registry/cache
+            work/cargo-home/registry/index
+            work/cargo-home/git/db
+            work/target
+          key: codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'scripts/cargo-env.sh') }}-${{ github.run_id }}
+          restore-keys: |
+            codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'scripts/cargo-env.sh') }}-
+            codex-bionic-cargo-${{ needs.resolve.outputs.version }}-
+            codex-bionic-cargo-
+
       - name: Build and test inside Bionic Termux
         env:
           CODEX_VERSION: ${{ needs.resolve.outputs.version }}
@@ -199,6 +218,28 @@ jobs:
             -v "$GITHUB_WORKSPACE:/data/data/com.termux/files/home/codex-termux" \
             -w /data/data/com.termux/files/home/codex-termux \
             "$TERMUX_DOCKER_IMAGE" bash .github/ci/bionic-build.sh "$CODEX_VERSION" "$TERMUX_DOCKER_IMAGE" "$GITHUB_REPOSITORY"
+
+      - name: Prune Cargo cache before saving
+        if: always()
+        run: |
+          set -euo pipefail
+          sudo chmod -R a+rwX work/cargo-home work/target 2>/dev/null || true
+          rm -rf work/target/release/codex work/target/release/codex-code-mode-host \
+            work/target/release/incremental work/cargo-home/registry/src 2>/dev/null || true
+          if [ -d work/target/release/deps ]; then
+            find work/target/release/deps -maxdepth 1 -type f -executable ! -name '*.so' -delete 2>/dev/null || true
+          fi
+
+      - name: Save Cargo build cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            work/cargo-home/registry/cache
+            work/cargo-home/registry/index
+            work/cargo-home/git/db
+            work/target
+          key: codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'scripts/cargo-env.sh') }}-${{ github.run_id }}
 
       - name: Verify Bionic acceptance manifest
         env:

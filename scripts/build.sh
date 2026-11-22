@@ -7,6 +7,7 @@
 set -Eeuo pipefail
 # Report the failing command (a bare `set -e` exit leaves no trace in the CI log).
 # EXIT, not ERR: ERR also fires for commands that are expected to exit non-zero.
+# shellcheck disable=SC2154
 trap 'rc=$?; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -124,7 +125,10 @@ rm -rf "$DIST"; mkdir -p "$DIST/pkg"
 install -m755 "$CARGO_TARGET_DIR/release/codex" "$DIST/pkg/codex"
 install -m755 "$CARGO_TARGET_DIR/release/codex-code-mode-host" "$DIST/pkg/codex-code-mode-host"
 cp "$SRC/LICENSE" "$SRC/NOTICE" "$ROOT/THIRD_PARTY.md" "$DIST/pkg/"
-tar -C "$DIST/pkg" -czf "$DIST/codex-termux-aarch64.tar.gz" codex codex-code-mode-host LICENSE NOTICE THIRD_PARTY.md
+GZIP_CMD=(gzip -9)
+command -v pigz >/dev/null 2>&1 && GZIP_CMD=(pigz -9)
+tar -C "$DIST/pkg" -cf - codex codex-code-mode-host LICENSE NOTICE THIRD_PARTY.md \
+  | "${GZIP_CMD[@]}" > "$DIST/codex-termux-aarch64.tar.gz"
 cp "$DIST/pkg/codex" "$DIST/pkg/codex-code-mode-host" "$DIST/"
 (cd "$DIST" && sha256sum codex-termux-aarch64.tar.gz > codex-termux-aarch64.tar.gz.sha256)
 

@@ -33,7 +33,20 @@ else
 fi
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+cleanup() {
+  rm -rf "$TMP"
+  if [ -n "${DEST:-}" ]; then
+    rm -f "$DEST/.codex.new.$$" "$DEST/.codex-code-mode-host.new.$$"
+  fi
+}
+trap cleanup EXIT
+
+CURL_COMMON=(-fSL --retry 3 --retry-delay 2 --connect-timeout 15)
+if [ -t 2 ]; then
+  CURL_DOWNLOAD=(-# "${CURL_COMMON[@]}")
+else
+  CURL_DOWNLOAD=(-sS "${CURL_COMMON[@]}")
+fi
 
 # A 64-hex string value from the build manifest. Pipelines here must not end in a reader that
 # quits early (grep -q, head): under `set -o pipefail` the writer then dies of SIGPIPE and the
@@ -47,7 +60,7 @@ hash_of() { [ -f "$1" ] && sha256sum "$1" | cut -d' ' -f1 || true; }
 # release ships; compare hashes, not versions, so a re-cut (vX.Y.Z-rN) is picked up. Done
 # before touching packages so an up-to-date run stays quiet.
 if [ "${CODEX_TERMUX_FORCE:-0}" != "1" ] && [ -x "$DEST/codex" ] \
-   && curl -fsSL "$BASE/build-manifest.json" -o "$TMP/build-manifest.json" 2>/dev/null; then
+   && curl -sS "${CURL_COMMON[@]}" "$BASE/build-manifest.json" -o "$TMP/build-manifest.json" 2>/dev/null; then
   want="$(json_field "$TMP/build-manifest.json" binary_sha256)"
   want_host="$(json_field "$TMP/build-manifest.json" host_sha256)"
   if [ -n "$want" ] && [ "$want" = "$(hash_of "$DEST/codex")" ] \
@@ -57,34 +70,33 @@ if [ "${CODEX_TERMUX_FORCE:-0}" != "1" ] && [ -x "$DEST/codex" ] \
   fi
 fi
 
-# The binaries link the Termux OpenSSL and liblzma runtimes.
+# The binaries link the Termux OpenSSL and liblzma runtimes. Skip `pkg install` (which refreshes
+# apt indexes over the network) when dpkg already reports both packages installed.
 if [ "${CODEX_TERMUX_SKIP_DEPS:-0}" != "1" ] && command -v pkg >/dev/null 2>&1; then
-  pkg install -y openssl liblzma >/dev/null
+  if ! command -v dpkg >/dev/null 2>&1 || ! dpkg -s openssl liblzma >/dev/null 2>&1; then
+    pkg install -y openssl liblzma >/dev/null
+  fi
 fi
 
 echo "install: downloading $ASSET ($VERSION)"
-curl -fsSL "$BASE/$ASSET" -o "$TMP/$ASSET"
-curl -fsSL "$BASE/$ASSET.sha256" -o "$TMP/$ASSET.sha256"
+curl "${CURL_DOWNLOAD[@]}" "$BASE/$ASSET" -o "$TMP/$ASSET"
+curl -sS "${CURL_COMMON[@]}" "$BASE/$ASSET.sha256" -o "$TMP/$ASSET.sha256"
 (cd "$TMP" && sha256sum -c "$ASSET.sha256")
 
-mkdir -p "$DEST"
-# Same-directory rename is atomic, so a running codex is never half-replaced.
+mkdir -p "$TMP/extract" "$DEST"
+# Extract once (the archive holds hundreds of MB of binaries), then stage and rename atomically
+# inside $DEST so a running codex is never half-replaced and same-FS moves avoid an extra copy.
+tar -xzf "$TMP/$ASSET" -C "$TMP/extract"
 install_one() {   # install_one <name>
-  install -m755 "$TMP/$1" "$DEST/.$1.new.$$"
+  chmod 755 "$TMP/extract/$1"
+  mv -f "$TMP/extract/$1" "$DEST/.$1.new.$$"
   mv -f "$DEST/.$1.new.$$" "$DEST/$1"
 }
 
-tar -xzf "$TMP/$ASSET" -C "$TMP" codex
 # The code-mode host is the JavaScript engine behind `exec`; codex finds it next to itself.
 # Older releases have none, and a leftover host from a newer release must not be paired
 # with an older codex.
-members="$(tar -tzf "$TMP/$ASSET")"   # captured first: `tar -t | grep -q` dies of SIGPIPE
-case $'\n'"$members"$'\n' in
-  *$'\ncodex-code-mode-host\n'*) has_host=1 ;;
-  *) has_host=0 ;;
-esac
-if [ "$has_host" = 1 ]; then
-  tar -xzf "$TMP/$ASSET" -C "$TMP" codex-code-mode-host
+if [ -f "$TMP/extract/codex-code-mode-host" ]; then
   install_one codex-code-mode-host
 else
   rm -f "$DEST/codex-code-mode-host"

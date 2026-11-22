@@ -8,17 +8,18 @@
 resolve ── 决定上游版本和发布 tag，判断有没有新东西要发；读出上游锁定的 v8 版本，
    │       看对应的 rusty-v8-v<版本>-b<N> 是否已经发布
 rusty_v8 ─ 只在还没发布时运行：调用 rusty-v8.yml 编译并发布（约两小时）
-tests ──── 静态检查、安装器和发布逻辑的离线测试（ubuntu-latest，很快）
+tests ──── 静态检查（bash -n、shellcheck）、安装器和发布逻辑的离线测试（ubuntu-latest，很快）
 bionic ─── ubuntu-24.04-arm + 固定的 termux-docker 镜像：
-   │       安装依赖 → 拉取上游 tag → 打补丁 → 下载并校验 V8 归档 → cargo build --release
-   │       → 上游 code-mode 运行时的全部测试 → 在 Bionic 里真实执行（见下）
+   │       恢复 Cargo 缓存 → 安装依赖（含 lld）→ 拉取上游 tag → 打补丁 → 下载并校验 V8 归档
+   │       → cargo build --release（ThinLTO + lld）→ 上游 code-mode 运行时的全部测试
+   │       → 在 Bionic 里真实执行（见下）→ 裁剪并保存 Cargo 缓存
 release ── 唯一有写权限的任务：发布 tarball、SHA-256 和 build-manifest.json；
            tag 钉在构建的提交上，只有最高版本成为 Latest，说明里列出变更
 ```
 
 | 触发 | 做什么 |
 | --- | --- |
-| 推送到 `main` | 完整构建和测试；版本已发布过就不再发布 |
+| 推送到 `main` | 完整构建和测试（仅改 `docs/**`、`*.md`、`LICENSE` 时跳过）；版本已发布过就不再发布；与定时/手动任务共用串行并发组避免发布竞争 |
 | 每天 03:00 UTC | 检查上游最新稳定版；只有新版本才构建，通过验收后自动发布 |
 | 手动运行 | 构建指定版本；勾选 `recut` 在补丁变化后重新发布同一版本（`vX.Y.Z-rN`） |
 | PR | 只跑 `resolve` 和 `tests`（静态检查、安装器和发布逻辑的测试） |

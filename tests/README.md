@@ -5,10 +5,10 @@
 | 文件 | 作用 |
 | --- | --- |
 | `test_ci.py` | 发布逻辑（`python3 -m unittest -v tests/test_ci.py`，CI 的 `tests` 任务运行）：在临时 git 仓库里用假的 `gh` 真实执行 workflow 的 resolve 和 release 步骤：新版本用 `vX.Y.Z`、`recut` 取下一个 `-rN`、tag 钉在构建的提交上、旧版本重发不抢 Latest、被占用的 tag 名自动顺延、说明里列出相对上一个 Release 的补丁变更；以及 V8 归档：从上游 `Cargo.toml` 读出精确的 `v8` 版本、判断 `rusty-v8-v*` 是否已发布、发布时从不成为 Latest、已发布的不重复发布、`rusty-v8-v*` 不被当成 Codex 版本。需要 bash、git、jq、python3。 |
-| `test_install.sh` | `install.sh` 的离线场景（12 个）：全新安装、无变化不重复下载、缺宿主程序、哈希被改、降级、慢 `tar -t` 的回归，以及更新后重启运行中的守护进程的几种情形。只需 bash、tar、sha256sum、python3。 |
-| `test_daemon.sh <codex>` | 守护进程生命周期：自动链接、socket 路径长度、`/proc` 身份记录、不带远程控制、start / 复用 / version / restart / stop / bootstrap；以及补丁 0019：在守护进程运行时删掉 socket（只有它在用时删整个目录，模拟 Termux 清空 `$PREFIX/tmp`）和 `app-server-control.sock` 软链，它要在几秒内在原路径上恢复，且仍是同一个进程。 |
+| `test_install.sh` | `install.sh` 的离线场景（14 个）：全新安装、无变化不重复下载、缺宿主程序、哈希被改、降级、单次 `tar` 解压回归、已装依赖跳过 `pkg install`，以及更新后重启运行中的守护进程的几种情形。只需 bash、tar、sha256sum、python3。 |
+| `test_daemon.sh <codex>` | 守护进程生命周期：自动链接、`var/run` socket 路径与长度、`/proc` 身份记录、不带远程控制、start / 复用 / version / restart / stop / bootstrap；以及补丁 0019：在守护进程运行时删掉 socket（只有它在用时删整个目录）和 `app-server-control.sock` 软链，它要通过 `inotify` 在原路径上恢复，且仍是同一个进程。 |
 | `test_daemon_session.sh <codex>` | 一个客户端经守护进程的控制 socket 跑完整的 Code Mode 会话，结果交给 `check_code_mode.py` 检查。 |
-| `test_daemon_tui.sh <codex>` | 真 TUI 在伪终端里用默认设置自动启动并连上守护进程；再测 `--no-daemon` 和 `features.daemon_auto_start=false` 两种关闭方式。每个用例先用假 API key 登录：0.164.0 起未登录时 TUI 显示 Bedrock 登录引导，它跑在内嵌服务上，不启动守护进程。 |
+| `test_daemon_tui.sh <codex>` | 真 TUI 在伪终端里（经 `tui_capture.py --until-raw` 等待进入备用屏，无需硬等固定超时）用默认设置自动启动并连上守护进程；再测 `--no-daemon` 和 `features.daemon_auto_start=false` 两种关闭方式。每个用例先用假 API key 登录：0.164.0 起未登录时 TUI 显示 Bedrock 登录引导，它跑在内嵌服务上，不启动守护进程。 |
 | `test_subcommands.sh <codex>` | 不需要网络和账号的子命令：一个 stdio MCP 服务器（`mcp_echo.py`）被模型经 Code Mode 调用，`plugin` 用本地市场走完添加、安装、列表、卸载，`exec resume`、`archive` / `unarchive` / `delete`、`migrate-rollouts`、`features`、`completion`。 |
 | `test_update_prompt.sh <codex>` | 补丁 0018：手写更新检查的缓存（`version.json` 和按真实二进制生成的 `termux-build.json`），用 `tui_capture.py` 在伪终端里启动 TUI，等到画出更新提示或之后的登录引导：同版本的另一个构建会弹出提示并写明构建哈希；正在运行的构建不提示；检查之后二进制被替换时不拿旧哈希提示；「不再提醒」只忽略那一个构建。再对 github.com 做一次真实检查：最新 Release 就是当前版本时，必须记录下正在运行的二进制（没有网络时只报告）。 |
 | `tui_capture.py` | 在伪终端里运行 TUI 并回答它等待的终端查询（同 `scripts/bench-startup.py`），把画出的内容去掉转义序列和空白后存成可 grep 的文本：ratatui 跳过已经是空白的格子而不写空格，所以只能按去掉空白的文字匹配。没有终端回答查询时 TUI 停在第一屏之前，`script </dev/null` 看不到任何界面文字。 |

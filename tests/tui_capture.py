@@ -42,6 +42,7 @@ def main():
     opts, argv = args[:split], args[split + 1:]
     timeout, out = float(opts[0]), opts[1]
     until = opts[opts.index("--until") + 1] if "--until" in opts else None
+    until_raw = opts[opts.index("--until-raw") + 1].encode() if "--until-raw" in opts else None
     linger = float(opts[opts.index("--linger") + 1]) if "--linger" in opts else 0.0
     until = re.sub(r"\s+", "", until) if until else None
 
@@ -66,7 +67,10 @@ def main():
             for _ in range(buf.count(query) - answered.get(query, 0)):
                 os.write(fd, reply)
             answered[query] = buf.count(query)
-        if until and stop is None and until in text(buf):
+        if stop is None and (
+            (until and until in text(buf))
+            or (until_raw and until_raw in buf)
+        ):
             stop = time.monotonic() + linger
     try:
         os.killpg(pid, signal.SIGKILL)

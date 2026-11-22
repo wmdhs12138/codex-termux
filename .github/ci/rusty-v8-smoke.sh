@@ -5,6 +5,7 @@
 #
 #   rusty-v8-smoke.sh DIR    DIR holds scripts/build-rusty-v8.sh's output
 set -Eeuo pipefail
+# shellcheck disable=SC2154
 trap 'rc=$?; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

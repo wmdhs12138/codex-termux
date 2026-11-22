@@ -1,7 +1,7 @@
 {
   "upstream": "openai/codex",
   "repo": "wmdhs12138/codex-termux",
-  "version": "0.166.0",
+  "version": "0.171.0",
   "tag_prefix": "rust-v",
   "rust_min": "1.98.0",
   "rusty_v8_build": 1,

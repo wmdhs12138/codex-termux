@@ -34,6 +34,7 @@ cleanup() {
     echo "--- daemon.stderr.log"; cat "$CODEX_HOME/app-server-daemon/daemon.stderr.log"
   fi
 }
+# shellcheck disable=SC2154
 trap 'rc=$?; cleanup; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 field() { jq -er ".$2" <<<"$1"; }   # $1 = json, $2 = jq path; fails when missing or null
@@ -64,8 +65,8 @@ echo "== rendezvous socket (0011)"
 TARGET="$(readlink "$SOCKET")"
 echo "$TARGET (${#TARGET} bytes)"
 case "$TARGET" in
-  /data/data/com.termux/files/usr/tmp/codex-daemon-"$(id -u)"/*) ;;
-  *) fail "socket target is outside the Termux prefix tmp: $TARGET" ;;
+  /data/data/com.termux/files/usr/var/run/codex-daemon-"$(id -u)"/*) ;;
+  *) fail "socket target is outside the Termux prefix var/run: $TARGET" ;;
 esac
 # bind() needs the whole path in sun_path (108 bytes including the terminator).
 [ "${#TARGET}" -le 107 ] || fail "socket path is ${#TARGET} bytes, sun_path holds 107"

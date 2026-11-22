@@ -36,6 +36,7 @@ cleanup() {
     echo "--- daemon.stderr.log (tail)"; tail -20 "$CODEX_HOME/app-server-daemon/daemon.stderr.log"
   fi
 }
+# shellcheck disable=SC2154
 trap 'rc=$?; cleanup; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 for _ in $(seq 1 50); do [ -s "$W/mock/port" ] && break; sleep 0.2; done
 PORT="$(cat "$W/mock/port")"

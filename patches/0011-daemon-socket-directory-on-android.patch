@@ -1,8 +1,8 @@
 diff --git a/codex-rs/app-server-transport/src/transport/unix_socket.rs b/codex-rs/app-server-transport/src/transport/unix_socket.rs
-index 3f70bcc..b87f619 100644
+index 10fc906..7406de6 100644
 --- a/codex-rs/app-server-transport/src/transport/unix_socket.rs
 +++ b/codex-rs/app-server-transport/src/transport/unix_socket.rs
-@@ -292,7 +292,12 @@ fn protected_socket_path(rendezvous_path: &Path) -> IoResult<std::path::PathBuf>
+@@ -364,7 +364,12 @@ fn protected_socket_path(rendezvous_path: &Path) -> IoResult<std::path::PathBuf>
      })?;
      let path = std::fs::canonicalize(parent)?.join(name);
      let hash = Sha256::digest(path.as_os_str().as_bytes());
@@ -17,20 +17,40 @@ index 3f70bcc..b87f619 100644
  
  pub struct AppServerStartupLock {
 diff --git a/codex-rs/uds/src/daemon_directory.rs b/codex-rs/uds/src/daemon_directory.rs
-index 90c3c10..efa9f9a 100644
+index 90c3c10..19be439 100644
 --- a/codex-rs/uds/src/daemon_directory.rs
 +++ b/codex-rs/uds/src/daemon_directory.rs
-@@ -9,10 +9,24 @@ use std::os::unix::fs::DirBuilderExt;
+@@ -9,10 +9,44 @@ use std::os::unix::fs::DirBuilderExt;
  use std::os::unix::fs::MetadataExt;
  use std::path::PathBuf;
  
-+/// Android has no writable `/tmp`: it is a root-level directory owned by `shell`. Use the
-+/// Termux prefix' tmp, the directory `$TMPDIR` points to. It is a constant rather than read
-+/// from the environment because every client has to agree on it, and it is the shortest
-+/// writable location (the socket paths below must fit `sun_path`).
++/// Android has no writable `/tmp`: it is a root-level directory owned by `shell`. Use
++/// `$PREFIX/var/run` rather than `$PREFIX/tmp` because Termux empties `tmp` on app exit while
++/// the daemon outlives it, and `var/run` still keeps the socket path within `sun_path` (91 bytes
++/// with a 128-bit digest). Fall back to `$PREFIX` for custom-package Termux forks.
 +#[cfg(target_os = "android")]
 +fn temporary_root() -> io::Result<PathBuf> {
-+    Ok(PathBuf::from("/data/data/com.termux/files/usr/tmp"))
++    const TERMUX_USR: &str = "/data/data/com.termux/files/usr";
++    let standard_usr = PathBuf::from(TERMUX_USR);
++    if standard_usr.is_dir() {
++        let var_run = standard_usr.join("var/run");
++        fs::create_dir_all(&var_run)?;
++        return Ok(var_run);
++    }
++    if let Some(prefix) = std::env::var_os("PREFIX") {
++        let prefix_path = PathBuf::from(prefix);
++        if prefix_path.is_dir() {
++            let var_run = prefix_path.join("var/run");
++            if fs::create_dir_all(&var_run).is_ok() {
++                return Ok(var_run);
++            }
++            let tmp = prefix_path.join("tmp");
++            if tmp.is_dir() {
++                return Ok(tmp);
++            }
++        }
++    }
++    Ok(std::env::temp_dir())
 +}
 +
 +#[cfg(not(target_os = "android"))]

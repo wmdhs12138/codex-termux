@@ -3,6 +3,7 @@
 # Clang 21 for bindgen and sccache. Exports WORK and SCCACHE_DIR to the following steps; the
 # paths stay fixed so that sccache entries match across runs.
 set -Eeuo pipefail
+# shellcheck disable=SC2154
 trap 'rc=$?; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
 # The checkout, the toolchains V8 downloads and the build take ~30 GB.

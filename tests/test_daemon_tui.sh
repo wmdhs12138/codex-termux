@@ -26,9 +26,11 @@ fail() { echo "daemon tui test: $*" >&2; exit 1; }
 cleanup() {
   for home in "$W"/*/home; do CODEX_HOME="$home" "$CODEX" app-server daemon stop >/dev/null 2>&1 || true; done
 }
+# shellcheck disable=SC2154
 trap 'rc=$?; cleanup; [ "$rc" -eq 0 ] || echo "FAILED: $0 line $LINENO: $BASH_COMMAND (exit $rc)" >&2' EXIT
 
-# run_tui <name> [codex options...]: the TUI on a pty for 15 s in a fresh, signed-in CODEX_HOME.
+# run_tui <name> [codex options...]: the TUI on a pty in a fresh, signed-in CODEX_HOME, stopping
+# shortly after entering the alternate screen instead of waiting out a fixed timeout.
 # Not under $PREFIX/tmp: Codex refuses to create its helper binaries in a temp dir.
 run_tui() {
   local name="$1"; shift
@@ -39,16 +41,12 @@ run_tui() {
     mkdir -p "$CODEX_HOME/packages/app-server-daemon/current/bin"
     ln -s "$CODEX" "$CODEX_HOME/packages/app-server-daemon/current/bin/codex"
   fi
-  set +e
-  timeout -s KILL 15 script -qfec "$CODEX $*" "$W/$name/tui.raw" </dev/null >/dev/null 2>&1
-  set -e
-  strings -n 4 "$W/$name/tui.raw" > "$W/$name/tui.txt"
-  head -12 "$W/$name/tui.txt"
-  # (not `--no-daemon`: `script` prints the command line, and the hint itself says "background server")
-  if grep -q -E 'background server|no complete local package' "$W/$name/tui.txt"; then
+  python3 "$ROOT/tests/tui_capture.py" 20 "$W/$name/tui.txt" \
+    --until-raw $'\x1b[?1049h' --linger 1.5 -- "$CODEX" "$@"
+  if grep -q -E 'backgroundserver|nocompletelocalpackage' "$W/$name/tui.txt"; then
     fail "$name: the TUI could not start"
   fi
-  grep -q '?1049h' "$W/$name/tui.txt" || fail "$name: the TUI never reached its first screen"
+  grep -a -q '?1049h' "$W/$name/tui.raw" || fail "$name: the TUI never reached its first screen"
 }
 
 echo "== default settings: the TUI starts the daemon and attaches to it"

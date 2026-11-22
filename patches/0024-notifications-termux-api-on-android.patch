@@ -1,0 +1,184 @@
+diff --git a/codex-rs/tui/src/notifications/mod.rs b/codex-rs/tui/src/notifications/mod.rs
+index 260c026..fd51f8d 100644
+--- a/codex-rs/tui/src/notifications/mod.rs
++++ b/codex-rs/tui/src/notifications/mod.rs
+@@ -1,5 +1,7 @@
+ mod bel;
+ mod osc;
++#[cfg(target_os = "android")]
++mod termux;
+ 
+ use std::io;
+ 
+@@ -15,6 +17,8 @@ use osc::OscProtocol;
+ pub enum DesktopNotificationBackend {
+     Osc(OscBackend),
+     Bel(BelBackend),
++    #[cfg(target_os = "android")]
++    Termux(termux::TermuxBackend),
+ }
+ 
+ impl DesktopNotificationBackend {
+@@ -24,6 +28,10 @@ impl DesktopNotificationBackend {
+                 if supports_osc9(&terminal_info()) {
+                     Self::Osc(OscBackend::new(OscProtocol::Osc9))
+                 } else {
++                    #[cfg(target_os = "android")]
++                    if termux::TermuxBackend::is_available() {
++                        return Self::Termux(termux::TermuxBackend);
++                    }
+                     Self::Bel(BelBackend)
+                 }
+             }
+@@ -40,6 +48,8 @@ impl DesktopNotificationBackend {
+                 OscProtocol::Osc777 => NotificationMethod::Osc777,
+             },
+             DesktopNotificationBackend::Bel(_) => NotificationMethod::Bel,
++            #[cfg(target_os = "android")]
++            DesktopNotificationBackend::Termux(_) => NotificationMethod::Auto,
+         }
+     }
+ 
+@@ -47,6 +57,8 @@ impl DesktopNotificationBackend {
+         match self {
+             DesktopNotificationBackend::Osc(backend) => backend.notify(message),
+             DesktopNotificationBackend::Bel(backend) => backend.notify(message),
++            #[cfg(target_os = "android")]
++            DesktopNotificationBackend::Termux(backend) => backend.notify(message),
+         }
+     }
+ }
+diff --git a/codex-rs/tui/src/notifications/termux.rs b/codex-rs/tui/src/notifications/termux.rs
+new file mode 100644
+index 0000000..b661a5c
+--- /dev/null
++++ b/codex-rs/tui/src/notifications/termux.rs
+@@ -0,0 +1,128 @@
++//! Android/Termux desktop notifications via Termux:API (`termux-notification`).
++//!
++//! Dispatched on a single background worker thread so slow or unresponsive Termux:API IPC never
++//! stalls the TUI draw loop or leaks child processes.
++use std::io;
++use std::os::unix::fs::PermissionsExt;
++use std::path::Path;
++use std::process::Command;
++use std::process::Stdio;
++use std::sync::Condvar;
++use std::sync::Mutex;
++use std::sync::OnceLock;
++use std::time::Duration;
++use std::time::Instant;
++
++const NOTIFICATION_ID: &str = "codex";
++const MAX_BODY_CHARS: usize = 240;
++
++#[derive(Debug, Default)]
++pub struct TermuxBackend;
++
++struct PendingSlot {
++    latest: Mutex<Option<String>>,
++    ready: Condvar,
++}
++
++static WORKER: OnceLock<&'static PendingSlot> = OnceLock::new();
++
++impl TermuxBackend {
++    /// True when `termux-notification` is executable on PATH and this is a local session.
++    pub(super) fn is_available() -> bool {
++        !crate::clipboard_copy::is_ssh_session() && find_executable("termux-notification")
++    }
++
++    pub fn notify(&mut self, message: &str) -> io::Result<()> {
++        let body = sanitize_body(message);
++        let slot = WORKER.get_or_init(start_worker);
++        if let Ok(mut guard) = slot.latest.lock() {
++            *guard = Some(body);
++            slot.ready.notify_one();
++        }
++        Ok(())
++    }
++}
++
++fn start_worker() -> &'static PendingSlot {
++    let slot: &'static PendingSlot = Box::leak(Box::new(PendingSlot {
++        latest: Mutex::new(None),
++        ready: Condvar::new(),
++    }));
++    let _ = std::thread::Builder::new()
++        .name("termux-notification".into())
++        .spawn(move || {
++            loop {
++                let message = {
++                    let Ok(mut guard) = slot.latest.lock() else {
++                        return;
++                    };
++                    while guard.is_none() {
++                        let Ok(next) = slot.ready.wait(guard) else {
++                            return;
++                        };
++                        guard = next;
++                    }
++                    guard.take()
++                };
++                if let Some(body) = message {
++                    deliver(&body);
++                }
++            }
++        });
++    slot
++}
++
++fn deliver(body: &str) {
++    let Ok(mut child) = Command::new("termux-notification")
++        .args(["--id", NOTIFICATION_ID, "--title", "Codex", "--content", body])
++        .stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(Stdio::null())
++        .spawn()
++    else {
++        return;
++    };
++    let deadline = Instant::now() + Duration::from_secs(5);
++    loop {
++        match child.try_wait() {
++            Ok(Some(_)) => return,
++            Ok(None) if Instant::now() >= deadline => {
++                let _ = child.kill();
++                let _ = child.wait();
++                return;
++            }
++            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
++            Err(_) => {
++                let _ = child.kill();
++                let _ = child.wait();
++                return;
++            }
++        }
++    }
++}
++
++fn sanitize_body(message: &str) -> String {
++    let cleaned: String = message
++        .chars()
++        .map(|c| if c.is_control() { ' ' } else { c })
++        .collect();
++    let trimmed = cleaned.trim();
++    if trimmed.chars().count() <= MAX_BODY_CHARS {
++        return trimmed.to_string();
++    }
++    let mut out: String = trimmed.chars().take(MAX_BODY_CHARS - 1).collect();
++    out.push('…');
++    out
++}
++
++fn find_executable(name: &str) -> bool {
++    let Some(path) = std::env::var_os("PATH") else {
++        return false;
++    };
++    std::env::split_paths(&path).any(|dir| is_executable(&dir.join(name)))
++}
++
++fn is_executable(path: &Path) -> bool {
++    std::fs::metadata(path)
++        .is_ok_and(|meta| meta.is_file() && (meta.permissions().mode() & 0o111 != 0))
++}
