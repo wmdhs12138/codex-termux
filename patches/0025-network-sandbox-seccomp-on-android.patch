@@ -1,0 +1,660 @@
+diff --git a/codex-rs/app-server/src/command_exec.rs b/codex-rs/app-server/src/command_exec.rs
+index 8f79751..c0ca11b 100644
+--- a/codex-rs/app-server/src/command_exec.rs
++++ b/codex-rs/app-server/src/command_exec.rs
+@@ -261,6 +261,48 @@ impl CommandExecManager {
+                 CommandExecSession::Active { control_tx },
+             );
+         }
++        #[cfg(target_os = "android")]
++        let restrict_network = !exec_request
++            .permission_profile
++            .network_sandbox_policy()
++            .is_enabled();
++        #[cfg(target_os = "android")]
++        let spawned = if tty {
++            codex_utils_pty::pty::spawn_process_with_network_restriction(
++                program,
++                args,
++                cwd.as_path(),
++                env,
++                arg0,
++                size.unwrap_or_default(),
++                codex_utils_pty::ChildFds::Inherited(&[]),
++                restrict_network,
++            )
++            .await
++        } else if stream_stdin {
++            codex_utils_pty::pipe::spawn_process_with_network_restriction(
++                program,
++                args,
++                cwd.as_path(),
++                env,
++                arg0,
++                &[],
++                restrict_network,
++            )
++            .await
++        } else {
++            codex_utils_pty::pipe::spawn_process_no_stdin_with_network_restriction(
++                program,
++                args,
++                cwd.as_path(),
++                env,
++                arg0,
++                &[],
++                restrict_network,
++            )
++            .await
++        };
++        #[cfg(not(target_os = "android"))]
+         let spawned = if tty {
+             codex_utils_pty::spawn_pty_process(
+                 program,
+diff --git a/codex-rs/core/src/spawn.rs b/codex-rs/core/src/spawn.rs
+index d0b399b..07de5da 100644
+--- a/codex-rs/core/src/spawn.rs
++++ b/codex-rs/core/src/spawn.rs
+@@ -121,6 +121,10 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
+             // Close descriptors accidentally inherited by the child.
+             #[cfg(target_os = "macos")]
+             codex_utils_pty::pty::close_inherited_fds_except(&[]);
++            #[cfg(target_os = "android")]
++            if !network_sandbox_policy.is_enabled() {
++                codex_utils_pty::android_net_seccomp::install_network_filter()?;
++            }
+             Ok(())
+         });
+     }
+diff --git a/codex-rs/core/src/unified_exec/process_manager.rs b/codex-rs/core/src/unified_exec/process_manager.rs
+index 1b8e339..a91ba5f 100644
+--- a/codex-rs/core/src/unified_exec/process_manager.rs
++++ b/codex-rs/core/src/unified_exec/process_manager.rs
+@@ -1467,6 +1467,11 @@ impl UnifiedExecProcessManager {
+             tty,
+             stdin_open: tty,
+             inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
++            #[cfg(target_os = "android")]
++            restrict_network: !request
++                .permission_profile
++                .network_sandbox_policy()
++                .is_enabled(),
+         })
+         .await;
+         let spawned =
+diff --git a/codex-rs/sandboxing/src/launch.rs b/codex-rs/sandboxing/src/launch.rs
+index 0c2e5f9..52d6fdf 100644
+--- a/codex-rs/sandboxing/src/launch.rs
++++ b/codex-rs/sandboxing/src/launch.rs
+@@ -144,6 +144,18 @@ impl WrappedSandboxCommand {
+             use std::os::unix::process::CommandExt;
+             command.arg0(arg0);
+         }
++        #[cfg(target_os = "android")]
++        if !request
++            .permission_profile
++            .network_sandbox_policy()
++            .is_enabled()
++        {
++            use std::os::unix::process::CommandExt;
++            // SAFETY: install_network_filter only invokes async-signal-safe prctl syscalls.
++            unsafe {
++                command.pre_exec(codex_utils_pty::android_net_seccomp::install_network_filter);
++            }
++        }
+         Some(command)
+     }
+ 
+@@ -190,6 +202,11 @@ impl WrappedSandboxCommand {
+             tty: options.tty,
+             stdin_open: options.stdin_open,
+             inherited_fds: options.inherited_fds,
++            #[cfg(target_os = "android")]
++            restrict_network: !request
++                .permission_profile
++                .network_sandbox_policy()
++                .is_enabled(),
+         })
+         .await
+     }
+@@ -228,6 +245,18 @@ impl WrappedSandboxCommand {
+             .current_dir(request.cwd.to_abs_path()?)
+             .env_clear()
+             .envs(request.env);
++        #[cfg(target_os = "android")]
++        if !request
++            .permission_profile
++            .network_sandbox_policy()
++            .is_enabled()
++        {
++            use std::os::unix::process::CommandExt;
++            // SAFETY: install_network_filter only invokes async-signal-safe prctl syscalls.
++            unsafe {
++                command.pre_exec(codex_utils_pty::android_net_seccomp::install_network_filter);
++            }
++        }
+         Ok(command)
+     }
+ }
+diff --git a/codex-rs/sandboxing/src/spawn.rs b/codex-rs/sandboxing/src/spawn.rs
+index afdb142..cdefb01 100644
+--- a/codex-rs/sandboxing/src/spawn.rs
++++ b/codex-rs/sandboxing/src/spawn.rs
+@@ -48,6 +48,8 @@ pub struct SpawnRequest<'a> {
+     pub tty: bool,
+     pub stdin_open: bool,
+     pub inherited_fds: codex_utils_pty::ChildFds<'a>,
++    #[cfg(target_os = "android")]
++    pub restrict_network: bool,
+ }
+ 
+ /// Spawn a process using the backend selected by the prepared sandbox request.
+@@ -120,6 +122,43 @@ pub async fn spawn_process(request: SpawnRequest<'_>) -> Result<SpawnedProcess>
+         anyhow::bail!("Windows sandbox process spawn is unavailable on this platform");
+     }
+ 
++    #[cfg(target_os = "android")]
++    let spawned = if tty {
++        codex_utils_pty::pty::spawn_process_with_network_restriction(
++            request.program,
++            request.args,
++            request.cwd,
++            request.env,
++            request.arg0,
++            TerminalSize::default(),
++            request.inherited_fds,
++            request.restrict_network,
++        )
++        .await
++    } else if request.stdin_open {
++        codex_utils_pty::pipe::spawn_process_with_network_restriction(
++            request.program,
++            request.args,
++            request.cwd,
++            request.env,
++            request.arg0,
++            request.inherited_fds.as_slice(),
++            request.restrict_network,
++        )
++        .await
++    } else {
++        codex_utils_pty::pipe::spawn_process_no_stdin_with_network_restriction(
++            request.program,
++            request.args,
++            request.cwd,
++            request.env,
++            request.arg0,
++            request.inherited_fds.as_slice(),
++            request.restrict_network,
++        )
++        .await
++    };
++    #[cfg(not(target_os = "android"))]
+     let spawned = if tty {
+         codex_utils_pty::pty::spawn_process(
+             request.program,
+diff --git a/codex-rs/sandboxing/src/terminal_queries_tests.rs b/codex-rs/sandboxing/src/terminal_queries_tests.rs
+index ac57fb5..b5d364f 100644
+--- a/codex-rs/sandboxing/src/terminal_queries_tests.rs
++++ b/codex-rs/sandboxing/src/terminal_queries_tests.rs
+@@ -80,6 +80,8 @@ async fn direct_terminal_queries_are_answered() -> anyhow::Result<()> {
+         tty: true,
+         stdin_open: true,
+         inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
++        #[cfg(target_os = "android")]
++        restrict_network: false,
+     })
+     .await?;
+     let SpawnedProcess {
+diff --git a/codex-rs/utils/pty/src/android_net_seccomp.rs b/codex-rs/utils/pty/src/android_net_seccomp.rs
+new file mode 100644
+index 0000000..9de89f7
+--- /dev/null
++++ b/codex-rs/utils/pty/src/android_net_seccomp.rs
+@@ -0,0 +1,161 @@
++//! In-process `seccomp-bpf` network restriction for Android child processes.
++//!
++//! Android kernels lack Landlock and unprivileged user namespaces, so Linux's bubblewrap sandbox
++//! cannot run. Stacking a `SECCOMP_MODE_FILTER` on top of zygote's app filter still works without
++//! root, letting Codex enforce `network_access = false` at the kernel level for shell commands
++//! while keeping local `AF_UNIX` and `AF_NETLINK` sockets available.
++//!
++//! `install_network_filter` uses a static BPF program with no heap allocation and only two
++//! `prctl(2)` syscalls, so it is async-signal-safe inside `CommandExt::pre_exec`.
++use std::io;
++
++#[cfg(target_arch = "aarch64")]
++#[repr(C)]
++struct SockFilter {
++    code: u16,
++    jt: u8,
++    jf: u8,
++    k: u32,
++}
++
++#[cfg(target_arch = "aarch64")]
++#[repr(C)]
++struct SockFprog {
++    len: u16,
++    filter: *const SockFilter,
++}
++
++#[cfg(target_arch = "aarch64")]
++const fn bpf_stmt(code: u16, k: u32) -> SockFilter {
++    SockFilter {
++        code,
++        jt: 0,
++        jf: 0,
++        k,
++    }
++}
++
++#[cfg(target_arch = "aarch64")]
++const fn bpf_jump(code: u16, k: u32, jt: u8, jf: u8) -> SockFilter {
++    SockFilter { code, jt, jf, k }
++}
++
++// Linux BPF opcode constants (<linux/filter.h>).
++#[cfg(target_arch = "aarch64")]
++const BPF_LD_W_ABS: u16 = 0x20;
++#[cfg(target_arch = "aarch64")]
++const BPF_JMP_JEQ_K: u16 = 0x15;
++#[cfg(target_arch = "aarch64")]
++const BPF_RET_K: u16 = 0x06;
++
++// Linux prctl/seccomp constants (<linux/prctl.h>, <linux/seccomp.h>, <linux/audit.h>).
++#[cfg(target_arch = "aarch64")]
++const PR_SET_SECCOMP: libc::c_int = 22;
++#[cfg(target_arch = "aarch64")]
++const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
++#[cfg(target_arch = "aarch64")]
++const SECCOMP_MODE_FILTER: libc::c_ulong = 2;
++#[cfg(target_arch = "aarch64")]
++const AUDIT_ARCH_AARCH64: u32 = 0xc000_00b7;
++#[cfg(target_arch = "aarch64")]
++const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
++#[cfg(target_arch = "aarch64")]
++const SECCOMP_RET_ERRNO_EPERM: u32 = 0x0005_0000 | (libc::EPERM as u32);
++
++// Offsets into `struct seccomp_data` on little-endian AArch64.
++#[cfg(target_arch = "aarch64")]
++const OFFSET_NR: u32 = 0;
++#[cfg(target_arch = "aarch64")]
++const OFFSET_ARCH: u32 = 4;
++#[cfg(target_arch = "aarch64")]
++const OFFSET_ARG0_LO: u32 = 16;
++#[cfg(target_arch = "aarch64")]
++const OFFSET_ARG0_HI: u32 = 20;
++
++// Frozen AArch64 Linux syscall numbers (<asm-generic/unistd.h>).
++#[cfg(target_arch = "aarch64")]
++const SYS_PTRACE: u32 = 117;
++#[cfg(target_arch = "aarch64")]
++const SYS_SOCKET: u32 = 198;
++#[cfg(target_arch = "aarch64")]
++const SYS_PROCESS_VM_READV: u32 = 270;
++#[cfg(target_arch = "aarch64")]
++const SYS_PROCESS_VM_WRITEV: u32 = 271;
++#[cfg(target_arch = "aarch64")]
++const SYS_IO_URING_SETUP: u32 = 425;
++#[cfg(target_arch = "aarch64")]
++const SYS_IO_URING_ENTER: u32 = 426;
++#[cfg(target_arch = "aarch64")]
++const SYS_IO_URING_REGISTER: u32 = 427;
++
++#[cfg(target_arch = "aarch64")]
++const AF_UNIX: u32 = libc::AF_UNIX as u32;
++#[cfg(target_arch = "aarch64")]
++const AF_NETLINK: u32 = libc::AF_NETLINK as u32;
++
++/// Static BPF program denying non-local socket families, io_uring, and ptrace/process_vm_*.
++///
++/// Indices:
++/// - 0..=1:   verify `arch == AUDIT_ARCH_AARCH64`, else jump to 15 (DENY)
++/// - 2..=9:   dispatch on `nr` (`SYS_SOCKET` -> 10; blocked syscalls -> 15; others -> 16)
++/// - 10..=14: allow `socket(AF_UNIX | AF_NETLINK, ...)`, else 15 (DENY)
++/// - 15:      return `EPERM`
++/// - 16:      allow
++#[cfg(target_arch = "aarch64")]
++static NETWORK_DENY_FILTER: [SockFilter; 17] = [
++    bpf_stmt(BPF_LD_W_ABS, OFFSET_ARCH),                    // 0
++    bpf_jump(BPF_JMP_JEQ_K, AUDIT_ARCH_AARCH64, 0, 13),     // 1 -> 2 | 15
++    bpf_stmt(BPF_LD_W_ABS, OFFSET_NR),                      // 2
++    bpf_jump(BPF_JMP_JEQ_K, SYS_SOCKET, 6, 0),              // 3 -> 10 | 4
++    bpf_jump(BPF_JMP_JEQ_K, SYS_IO_URING_SETUP, 10, 0),     // 4 -> 15 | 5
++    bpf_jump(BPF_JMP_JEQ_K, SYS_IO_URING_ENTER, 9, 0),      // 5 -> 15 | 6
++    bpf_jump(BPF_JMP_JEQ_K, SYS_IO_URING_REGISTER, 8, 0),   // 6 -> 15 | 7
++    bpf_jump(BPF_JMP_JEQ_K, SYS_PTRACE, 7, 0),              // 7 -> 15 | 8
++    bpf_jump(BPF_JMP_JEQ_K, SYS_PROCESS_VM_READV, 6, 0),    // 8 -> 15 | 9
++    bpf_jump(BPF_JMP_JEQ_K, SYS_PROCESS_VM_WRITEV, 5, 6),   // 9 -> 15 | 16
++    bpf_stmt(BPF_LD_W_ABS, OFFSET_ARG0_HI),                 // 10
++    bpf_jump(BPF_JMP_JEQ_K, 0, 0, 3),                       // 11 -> 12 | 15
++    bpf_stmt(BPF_LD_W_ABS, OFFSET_ARG0_LO),                 // 12
++    bpf_jump(BPF_JMP_JEQ_K, AF_UNIX, 2, 0),                 // 13 -> 16 | 14
++    bpf_jump(BPF_JMP_JEQ_K, AF_NETLINK, 1, 0),              // 14 -> 16 | 15
++    bpf_stmt(BPF_RET_K, SECCOMP_RET_ERRNO_EPERM),           // 15: DENY
++    bpf_stmt(BPF_RET_K, SECCOMP_RET_ALLOW),                 // 16: ALLOW
++];
++
++/// Enable `PR_SET_NO_NEW_PRIVS` and attach the Android network-denial seccomp filter to the
++/// calling thread/process. Safe to call inside `CommandExt::pre_exec`.
++#[cfg(target_arch = "aarch64")]
++pub fn install_network_filter() -> io::Result<()> {
++    // SAFETY: `prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)` is an async-signal-safe syscall with no
++    // pointer arguments.
++    if unsafe { libc::prctl(PR_SET_NO_NEW_PRIVS, 1 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong, 0 as libc::c_ulong) } != 0 {
++        return Err(io::Error::last_os_error());
++    }
++    let prog = SockFprog {
++        len: NETWORK_DENY_FILTER.len() as u16,
++        filter: NETWORK_DENY_FILTER.as_ptr(),
++    };
++    // SAFETY: `prog` points to a `'static` array of valid BPF instructions for the duration of the
++    // syscall; the kernel copies the program before returning.
++    if unsafe {
++        libc::prctl(
++            PR_SET_SECCOMP,
++            SECCOMP_MODE_FILTER,
++            (&raw const prog) as libc::c_ulong,
++            0 as libc::c_ulong,
++            0 as libc::c_ulong,
++        )
++    } != 0
++    {
++        return Err(io::Error::last_os_error());
++    }
++    Ok(())
++}
++
++#[cfg(not(target_arch = "aarch64"))]
++pub fn install_network_filter() -> io::Result<()> {
++    Err(io::Error::new(
++        io::ErrorKind::Unsupported,
++        "Android network seccomp filter is only implemented for aarch64",
++    ))
++}
+diff --git a/codex-rs/utils/pty/src/child_command.rs b/codex-rs/utils/pty/src/child_command.rs
+index db1602e..fe5a696 100644
+--- a/codex-rs/utils/pty/src/child_command.rs
++++ b/codex-rs/utils/pty/src/child_command.rs
+@@ -91,6 +91,8 @@ pub struct Command {
+     pub(crate) stderr_file: Option<std::os::fd::OwnedFd>,
+     #[cfg(unix)]
+     pub(crate) arg0: Option<OsString>,
++    #[cfg(target_os = "android")]
++    pub(crate) restrict_network: bool,
+ }
+ 
+ impl Command {
+@@ -124,6 +126,8 @@ impl Command {
+             stderr_file: None,
+             #[cfg(unix)]
+             arg0: None,
++            #[cfg(target_os = "android")]
++            restrict_network: false,
+         }
+     }
+ 
+@@ -254,6 +258,12 @@ impl Command {
+         self
+     }
+ 
++    #[cfg(target_os = "android")]
++    pub fn restrict_network(&mut self, restrict: bool) -> &mut Self {
++        self.restrict_network = restrict;
++        self
++    }
++
+     /// Preserve Job Object assignment before the child begins executing on Windows.
+     #[cfg(windows)]
+     pub fn prepare_suspended_spawn(&mut self, job: &crate::JobObject) {
+@@ -317,7 +327,16 @@ impl Command {
+             let parent_pid = self.parent_pid;
+             #[cfg(not(target_os = "linux"))]
+             let parent_pid: Option<i32> = None;
+-            if new_session || explicit_fds || !targets.is_empty() || parent_pid.is_some() {
++            #[cfg(target_os = "android")]
++            let restrict_network = self.restrict_network;
++            #[cfg(not(target_os = "android"))]
++            let restrict_network = false;
++            if new_session
++                || explicit_fds
++                || !targets.is_empty()
++                || parent_pid.is_some()
++                || restrict_network
++            {
+                 // SAFETY: The caller keeps the selected descriptors open. Session
+                 // and parent-death setup use system calls; Linux and macOS cleanup
+                 // avoid allocation after fork. Other Unix targets have an
+@@ -334,6 +353,10 @@ impl Command {
+                             crate::pty::close_inherited_fds_except(&targets);
+                         }
+                         crate::pty::make_fds_inheritable(&targets)?;
++                        #[cfg(target_os = "android")]
++                        if restrict_network {
++                            crate::android_net_seccomp::install_network_filter()?;
++                        }
+                         Ok(())
+                     });
+                 }
+diff --git a/codex-rs/utils/pty/src/lib.rs b/codex-rs/utils/pty/src/lib.rs
+index 8b0070f..f3ccb0c 100644
+--- a/codex-rs/utils/pty/src/lib.rs
++++ b/codex-rs/utils/pty/src/lib.rs
+@@ -1,3 +1,5 @@
++#[cfg(target_os = "android")]
++pub mod android_net_seccomp;
+ mod child;
+ pub use child::Child;
+ mod child_command;
+diff --git a/codex-rs/utils/pty/src/pipe.rs b/codex-rs/utils/pty/src/pipe.rs
+index 1088c01..9f63477 100644
+--- a/codex-rs/utils/pty/src/pipe.rs
++++ b/codex-rs/utils/pty/src/pipe.rs
+@@ -138,7 +138,10 @@ async fn spawn_process_with_stdin_mode(
+     arg0: &Option<String>,
+     stdin_mode: PipeStdinMode,
+     inherited_fds: &[i32],
++    restrict_network: bool,
+ ) -> Result<SpawnedProcess> {
++    #[cfg(not(target_os = "android"))]
++    let _ = restrict_network;
+     if program.is_empty() {
+         anyhow::bail!("missing program for pipe spawn");
+     }
+@@ -156,6 +159,8 @@ async fn spawn_process_with_stdin_mode(
+         .process_mode(ProcessMode::NewSession)
+         .descriptor_policy(DescriptorPolicy::Explicit)
+         .inherit_fds(inherited_fds);
++    #[cfg(target_os = "android")]
++    command.restrict_network(restrict_network);
+     #[cfg(target_os = "linux")]
+     command.terminate_on_parent_death();
+     #[cfg(not(unix))]
+@@ -319,6 +324,30 @@ pub async fn spawn_process(
+         arg0,
+         PipeStdinMode::Piped,
+         inherited_fds,
++        false,
++    )
++    .await
++}
++
++#[cfg(target_os = "android")]
++pub async fn spawn_process_with_network_restriction(
++    program: impl AsRef<OsStr>,
++    args: &[String],
++    cwd: &Path,
++    env: &HashMap<String, String>,
++    arg0: &Option<String>,
++    inherited_fds: &[i32],
++    restrict_network: bool,
++) -> Result<SpawnedProcess> {
++    spawn_process_with_stdin_mode(
++        program.as_ref(),
++        args,
++        cwd,
++        env,
++        arg0,
++        PipeStdinMode::Piped,
++        inherited_fds,
++        restrict_network,
+     )
+     .await
+ }
+@@ -342,6 +371,30 @@ pub async fn spawn_process_no_stdin(
+         arg0,
+         PipeStdinMode::Null,
+         inherited_fds,
++        false,
++    )
++    .await
++}
++
++#[cfg(target_os = "android")]
++pub async fn spawn_process_no_stdin_with_network_restriction(
++    program: impl AsRef<OsStr>,
++    args: &[String],
++    cwd: &Path,
++    env: &HashMap<String, String>,
++    arg0: &Option<String>,
++    inherited_fds: &[i32],
++    restrict_network: bool,
++) -> Result<SpawnedProcess> {
++    spawn_process_with_stdin_mode(
++        program.as_ref(),
++        args,
++        cwd,
++        env,
++        arg0,
++        PipeStdinMode::Null,
++        inherited_fds,
++        restrict_network,
+     )
+     .await
+ }
+diff --git a/codex-rs/utils/pty/src/pty.rs b/codex-rs/utils/pty/src/pty.rs
+index 8b46fdd..7efc533 100644
+--- a/codex-rs/utils/pty/src/pty.rs
++++ b/codex-rs/utils/pty/src/pty.rs
+@@ -156,7 +156,45 @@ pub async fn spawn_process(
+     size: TerminalSize,
+     inherited_fds: ChildFds<'_>,
+ ) -> Result<SpawnedProcess> {
+-    let program = program.as_ref();
++    spawn_process_inner(program.as_ref(), args, cwd, env, arg0, size, inherited_fds, false).await
++}
++
++#[cfg(target_os = "android")]
++pub async fn spawn_process_with_network_restriction(
++    program: impl AsRef<OsStr>,
++    args: &[String],
++    cwd: &Path,
++    env: &HashMap<String, String>,
++    arg0: &Option<String>,
++    size: TerminalSize,
++    inherited_fds: ChildFds<'_>,
++    restrict_network: bool,
++) -> Result<SpawnedProcess> {
++    spawn_process_inner(
++        program.as_ref(),
++        args,
++        cwd,
++        env,
++        arg0,
++        size,
++        inherited_fds,
++        restrict_network,
++    )
++    .await
++}
++
++async fn spawn_process_inner(
++    program: &OsStr,
++    args: &[String],
++    cwd: &Path,
++    env: &HashMap<String, String>,
++    arg0: &Option<String>,
++    size: TerminalSize,
++    inherited_fds: ChildFds<'_>,
++    restrict_network: bool,
++) -> Result<SpawnedProcess> {
++    #[cfg(not(target_os = "android"))]
++    let _ = restrict_network;
+     if program.is_empty() {
+         anyhow::bail!("missing program for PTY spawn");
+     }
+@@ -178,15 +216,35 @@ pub async fn spawn_process(
+         && cwd.is_dir()
+     {
+         // Keep portable-pty's PATH and missing-cwd behavior for ordinary launches.
+-        return spawn_process_preserving_fds(program, args, cwd, env, arg0, size, inherited_fds)
+-            .await;
++        return spawn_process_preserving_fds(
++            program,
++            args,
++            cwd,
++            env,
++            arg0,
++            size,
++            inherited_fds,
++            false,
++        )
++        .await;
+     }
+     #[cfg(unix)]
+-    if arg0.is_some() || !inherited_fds.as_slice().is_empty() {
+-        // portable-pty resolves argv[0] as the executable. Only a native spawn
+-        // can pass a dispatch name while executing the configured program.
+-        return spawn_process_preserving_fds(program, args, cwd, env, arg0, size, inherited_fds)
+-            .await;
++    if arg0.is_some()
++        || !inherited_fds.as_slice().is_empty()
++        || (cfg!(target_os = "android") && restrict_network)
++    {
++        // portable-pty resolves argv[0] as the executable and exposes no pre_exec hook.
++        return spawn_process_preserving_fds(
++            program,
++            args,
++            cwd,
++            env,
++            arg0,
++            size,
++            inherited_fds,
++            restrict_network,
++        )
++        .await;
+     }
+ 
+     spawn_process_portable(program, args, cwd, env, size).await
+@@ -379,11 +437,16 @@ async fn spawn_process_preserving_fds(
+     arg0: Option<&str>,
+     size: TerminalSize,
+     descriptors: ChildFds<'_>,
++    restrict_network: bool,
+ ) -> Result<SpawnedProcess> {
+-    // A distinct argv[0] needs a native spawn. Keep the lookup behavior that
+-    // portable-pty supplies for launches without extra descriptors.
++    #[cfg(not(target_os = "android"))]
++    let _ = restrict_network;
++    // A distinct argv[0] (or Android seccomp pre_exec) needs a native spawn. Keep the lookup
++    // behavior that portable-pty supplies for launches without extra descriptors.
+     let resolved;
+-    let (program, cwd) = if arg0.is_some() && descriptors.as_slice().is_empty() {
++    let (program, cwd) = if (arg0.is_some() || (cfg!(target_os = "android") && restrict_network))
++        && descriptors.as_slice().is_empty()
++    {
+         resolved = portable_launch_paths(program, cwd, env)?;
+         (resolved.0.as_os_str(), resolved.1.as_path())
+     } else {
+@@ -466,6 +529,10 @@ async fn spawn_process_preserving_fds(
+                     configure_child_terminal()?;
+                     close_inherited_fds_except(&inherited_fds);
+                     make_fds_inheritable(&inherited_fds)?;
++                    #[cfg(target_os = "android")]
++                    if restrict_network {
++                        crate::android_net_seccomp::install_network_filter()?;
++                    }
+                     Ok(())
+                 });
+         }

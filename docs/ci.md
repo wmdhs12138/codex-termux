@@ -34,7 +34,7 @@ release ── 唯一有写权限的任务：发布 tarball、SHA-256 和 build-
 | --- | --- |
 | 冒烟 | `--version`、`--help`；全新 `CODEX_HOME` 下 `codex login status` 报"未登录"；API key 登录往返；`codex exec` 能走过启动路径（状态库、rollout 写锁，用假 key，不依赖网络）；TUI 在伪终端里默认设置下起来，进入第一屏 |
 | 假 Responses API（`tests/mock_responses.py`） | 模型实际拿到的工具列表；`apply_patch` 在工作区内真的写出文件、在工作区外被拒；网络搜索默认是实时；`codex update` 执行的命令是本项目的 `install.sh` |
-| Code Mode 端到端 | 假模型发出多次 `exec`，检查文本输出、嵌套工具调用、`store`/`load`、`exit()`、定时器、运行时错误；超过让出时间的脚本与 `wait` |
+| Code Mode 端到端 | 假模型发出多次 `exec`，检查文本输出、嵌套工具调用、`store`/`load`、`exit()`、定时器、运行时错误；超过让出时间的脚本与 `wait`；以及 `seccomp-bpf` 禁网验收（受限时 `AF_INET` 返回 `EPERM` 且 `AF_UNIX` 可用，放开网络后 `AF_INET` 恢复） |
 | 共享后台服务 | `tests/test_daemon.sh`、`tests/test_daemon_session.sh`、`tests/test_daemon_tui.sh`（见 [../tests/README.md](../tests/README.md)） |
 | 子命令 | `tests/test_subcommands.sh`：MCP、plugin、会话管理、features、completion |
 | 依赖 | 二进制的动态库依赖必须在 Termux 默认就有的范围内 |

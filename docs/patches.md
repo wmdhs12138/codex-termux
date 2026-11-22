@@ -10,7 +10,7 @@
 
 `rust-v0.169.0` 的适配：`remote_control/mod.rs` 多了两行 `use`，0015 随之更新上下文；`v8` 的 git fork 从 `seanh-oai/rusty_v8` 换成 `openai-oss-forks/rusty_v8`（`90a65f8`，官方 152.2.0 加一个只改 `src/cppgc.rs` 的提交），0021 改为删掉新的那一行，内容未变。
 
-`rust-v0.171.0` 的适配：上游把 `shell_environment_policy` 从 `core` 移到 `codex-protocol`（`protocol/src/shell_environment.rs`），0017 随之迁移上下文与路径；同时新增 0022（Termux:API 剪贴板）、0023（`codex doctor` 诚实报告 Android 无沙箱）、0024（`termux-notification` 后台通知），并精修了 0009、0011、0018、0019。
+`rust-v0.171.0` 的适配：上游把 `shell_environment_policy` 从 `core` 移到 `codex-protocol`（`protocol/src/shell_environment.rs`），0017 随之迁移上下文与路径；同时新增 0022（Termux:API 剪贴板）、0023（`codex doctor` 诚实报告 Android 部分沙箱状态）、0024（`termux-notification` 后台通知）、0025（Android `seccomp-bpf` 内核级禁网），并精修了 0009、0011、0018、0019。
 
 `rust-v0.164.0` 的适配审阅了 `arg0` 测试上下文和控制 socket 的 `DaemonSocketFileGuard` 重命名。
 
@@ -38,8 +38,9 @@
 | `0020-mxc-sandbox-without-mxc-sdk-on-android.patch` | 上游 `rust-v0.164.0` 新增的 `codex-mxc-sandbox`（Windows 的 MXC 沙箱）无条件依赖 `microsoft/mxc` 的 `mxc-sdk`。`mxc-sdk` 只为 Windows、Linux、macOS 编译 `mxc_engine::run`，`dispatch.rs` 却在所有平台上调用 `run::log_policy_hash`，Android 上编译失败（`cannot find run in mxc_engine`）。`codex-mxc-sandbox` 只在 Windows 和测试里用到 `mxc-sdk`，其他平台上的 `is_available`、`run_main` 等是不依赖它的空实现，所以补丁把这项依赖改成 `cfg(not(target_os = "android"))`：`Cargo.lock` 不变，其他平台和上游一致。 |
 | `0021-v8-from-crates-io-without-the-git-fork.patch` | 上游 `rust-v0.166.0` 在工作区的 `[patch.crates-io]` 里把 `v8` 换成 git fork（起初是 `seanh-oai/rusty_v8`，`rust-v0.169.0` 起是 `openai-oss-forks/rusty_v8`）。这个 fork 只比 crates.io 上的 152.2.0 多一两个提交，都只改 `cppgc::Member` 在 Rust 一侧的内存布局，用到它的只有 `codex-v8-poc` 里标了 `#[ignore]` 的测试，Code Mode 不用 cppgc。但 Cargo 解析依赖时会克隆这个 fork 及其全部子模块（V8、ICU、libc++ 等，数 GB）。补丁删掉这一行，`v8` 像 `rust-v0.165.0` 及以前一样来自 crates.io：版本和依赖列表相同，链接的是同一个归档，`Cargo.lock` 里只是 `v8` 的来源变了。 |
 | `0022-clipboard-termux-api-on-android.patch` | 上游在 Android 上关闭了 `/copy`、导出对话到剪贴板和右键粘贴，本地复制恒定失败。补丁在 Android 上重新启用这些入口，本地读写分别调用 Termux:API 的 `termux-clipboard-set` / `termux-clipboard-get`（带超时防卡死）；未安装 Termux:API 时复制自动回退到 OSC 52。 |
-| `0023-doctor-report-android-sandbox-unavailable.patch` | 上游 `codex doctor` 只按配置打印 `"restricted fs + network"`，容易让 Android 用户误以为 shell 命令受内核沙箱隔离。补丁在 Android 上把沙箱检查标为警告，补充 `platform sandbox: unavailable (Android kernel)` 与 `shell enforcement: none` 详情，并在摘要行明确说明配置不会被强制执行。 |
+| `0023-doctor-report-android-sandbox-unavailable.patch` | 上游 `codex doctor` 只按配置打印 `"restricted fs + network"`，容易让 Android 用户误以为 shell 命令受完整内核沙箱隔离。补丁在 Android 上把沙箱检查标为警告，明确说明为部分沙箱：文件系统策略对 shell 不强制执行，网络限制由 `seccomp-bpf` 强制执行。 |
 | `0024-notifications-termux-api-on-android.patch` | Android 终端默认走 BEL，切出 Termux 后看不到任务完成或审批提醒。补丁新增 `tui/src/notifications/termux.rs`：当通知方式为 `auto` 且本地 `PATH` 存在 `termux-notification` 时，由单个后台工作线程合并并异步派发 Android 系统通知（不阻塞 TUI 绘制、超时自动清理子进程）；未安装时保持回退到 BEL。 |
+| `0025-network-sandbox-seccomp-on-android.patch` | Android 没有 Landlock 和 user namespace，但允许在 zygote 的 seccomp 过滤器之上叠加第二层 `SECCOMP_MODE_FILTER`。补丁在 `codex-utils-pty` 新增零依赖、静态 BPF 数组的 `android_net_seccomp` 模块（仅两次 async-signal-safe 的 `prctl`，不改 `Cargo.lock`），并在所有子进程启动路径的 `pre_exec` 接入：当 `network_sandbox_policy` 为受限时，校验 `AUDIT_ARCH_AARCH64` 并以 `EPERM` 拦截非 `AF_UNIX`/`AF_NETLINK` 的 `socket()` 及 `io_uring_*`、`ptrace`/`process_vm_*`，让 `network_access = false` 真正落到内核层。 |
 
 ## Code Mode 的 V8
 

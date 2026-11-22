@@ -1,41 +1,53 @@
 diff --git a/codex-rs/cli/src/doctor/output.rs b/codex-rs/cli/src/doctor/output.rs
-index 5445484..5b3f608 100644
+index 5445484..a6e1e32 100644
 --- a/codex-rs/cli/src/doctor/output.rs
 +++ b/codex-rs/cli/src/doctor/output.rs
-@@ -762,7 +762,15 @@ fn sandbox_summary(check: &DoctorCheck) -> String {
+@@ -762,7 +762,24 @@ fn sandbox_summary(check: &DoctorCheck) -> String {
      let approval = detail::detail_value(check, "approval policy");
      let filesystem = detail::detail_value(check, "filesystem sandbox");
      let network = detail::detail_value(check, "network sandbox");
 +    let platform = detail::detail_value(check, "platform sandbox");
      match (approval, filesystem, network) {
 +        (Some(approval), Some(filesystem), Some(network))
-+            if platform.as_deref() == Some("unavailable (Android kernel)") =>
++            if platform.as_deref()
++                == Some(
++                    "partial on Android (seccomp-bpf network only; no filesystem sandbox)",
++                ) =>
 +        {
-+            format!(
-+                "unavailable on Android ({filesystem} fs + {network} network not enforced) · approval {approval}"
-+            )
++            if network == "restricted" {
++                format!(
++                    "Android partial sandbox ({filesystem} fs not enforced, network blocked via seccomp-bpf) · approval {approval}"
++                )
++            } else {
++                format!(
++                    "Android partial sandbox ({filesystem} fs not enforced, {network} network) · approval {approval}"
++                )
++            }
 +        }
          (Some(approval), Some(filesystem), Some(network)) => {
              format!("{filesystem} fs + {network} network · approval {approval}")
          }
 diff --git a/codex-rs/cli/src/doctor/sandbox.rs b/codex-rs/cli/src/doctor/sandbox.rs
-index 4e1d54b..f464ff6 100644
+index 4e1d54b..839e25b 100644
 --- a/codex-rs/cli/src/doctor/sandbox.rs
 +++ b/codex-rs/cli/src/doctor/sandbox.rs
-@@ -110,6 +110,20 @@ pub(super) fn sandbox_check(config: &Config, arg0_paths: &Arg0DispatchPaths) ->
+@@ -110,6 +110,23 @@ pub(super) fn sandbox_check(config: &Config, arg0_paths: &Arg0DispatchPaths) ->
          summary = "Linux sandbox helper path does not exist".to_string();
      }
  
 +    #[cfg(target_os = "android")]
 +    {
-+        details.push("platform sandbox: unavailable (Android kernel)".to_string());
 +        details.push(
-+            "shell enforcement: none (policies are advisory; only apply_patch checks writable roots)"
++            "platform sandbox: partial on Android (seccomp-bpf network only; no filesystem sandbox)"
++                .to_string(),
++        );
++        details.push(
++            "shell enforcement: network enforced via seccomp-bpf when restricted; filesystem policies are advisory (apply_patch checks writable roots)"
 +                .to_string(),
 +        );
 +        if status == CheckStatus::Ok {
 +            status = CheckStatus::Warning;
-+            summary = "OS sandbox unavailable on Android (shell commands are not sandboxed)"
++            summary = "filesystem sandbox unavailable on Android (network restricted via seccomp-bpf when disabled)"
 +                .to_string();
 +        }
 +    }

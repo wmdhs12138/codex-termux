@@ -296,6 +296,48 @@ mock_stop
 LAST="$(ls "$ROOT/work/mock-code-mode-wait/out" | sort -V | tail -1)"
 python3 "$ROOT/tests/check_code_mode_wait.py" "$ROOT/work/mock-code-mode-wait/out/$LAST"
 
+# 6. Android seccomp-bpf network restriction (patch 0025): when network_access is disabled
+# (workspace-write default), shell commands must get EPERM on AF_INET while AF_UNIX still works;
+# enabling sandbox_workspace_write.network_access or danger-full-access must restore AF_INET.
+E2E_NET="$ROOT/work/e2e-net-seccomp"; rm -rf "$E2E_NET"; mkdir -p "$E2E_NET/cwd"
+python3 - "$E2E_NET/script.json" <<'PY'
+import json, sys
+py = (
+    "import errno, socket; "
+    "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.close(); "
+    "try:\n"
+    "  t = socket.socket(socket.AF_INET, socket.SOCK_STREAM); t.close(); inet = 'allowed'\n"
+    "except OSError as e:\n"
+    "  inet = 'eperm' if e.errno == errno.EPERM else f'err:{e.errno}'\n"
+    "print(f'net-check inet={inet} unix=allowed')"
+)
+source = f"const r = await tools.exec_command({{cmd: {json.dumps('python3 -c ' + json.dumps(py))}}});\ntext(JSON.stringify(r));\n"
+json.dump([[{"type": "custom_tool_call", "id": "ctc_1", "status": "completed", "call_id": "call_net1",
+             "name": "exec", "input": source}]], open(sys.argv[1], "w"))
+PY
+check_net_seccomp() {     # $1 = expected inet result (eperm|allowed), rest = codex exec options
+  EXPECT_INET="$1"; shift
+  mock_start "$ROOT/work/mock-net-seccomp" "$E2E_NET/script.json"
+  mock_exec -C "$E2E_NET/cwd" -c 'approval_policy="never"' --enable code_mode_only "$@" \
+    "check network seccomp" >work/net-seccomp-exec.txt 2>&1
+  mock_stop
+  LAST="$(ls "$ROOT/work/mock-net-seccomp/out" | sort -V | tail -1)"
+  python3 - "$ROOT/work/mock-net-seccomp/out/$LAST" "$EXPECT_INET" <<'PY'
+import json, sys
+outputs = " ".join(
+    json.dumps(item["output"])
+    for item in json.load(open(sys.argv[1]))["input"]
+    if item.get("type") in ("custom_tool_call_output", "function_call_output")
+)
+want = f"net-check inet={sys.argv[2]} unix=allowed"
+print("net-seccomp observed:", want if want in outputs else outputs[:400])
+assert want in outputs, f"expected {want!r} in {outputs[:1000]}"
+PY
+}
+check_net_seccomp eperm -c 'sandbox_mode="workspace-write"'
+check_net_seccomp allowed -c 'sandbox_mode="workspace-write"' -c 'sandbox_workspace_write.network_access=true'
+check_net_seccomp allowed -c 'sandbox_mode="danger-full-access"'
+
 # The shared background server: rendezvous socket under the Termux prefix, /proc identity,
 # start / reuse / restart / stop, a socket deleted under the running daemon (patches 0011 to 0014,
 # 0019).

@@ -39,7 +39,7 @@ codex update
 | Code Mode（模型写 JavaScript 编排工具调用） | 可用，引擎和官方一样是开启沙箱的 V8，带完整 ICU 和 `Temporal`；V8 由本项目为 Android 编译，见 [补丁说明](docs/patches.md#code-mode-的-v8) |
 | 共享后台服务、`codex agents` | 可用，和官方一样**默认开启**，[详情](docs/daemon-and-remote-control.md) |
 | 远程控制（ChatGPT 应用连到这台手机） | 可用，和官方一样**需要主动开启**并配对，[详情](docs/daemon-and-remote-control.md) |
-| 操作系统沙箱、`codex sandbox` | **不可用**（Android 内核限制，见下；`codex doctor` 也会明确提示） |
+| 操作系统沙箱、`codex sandbox` | **部分可用**（**禁网通过 `seccomp-bpf` 在内核层强制执行**；文件系统沙箱受 Android 内核限制不可用，`codex sandbox` 不可用，`codex doctor` 也会明确提示） |
 | 剪贴板文字复制/粘贴（`/copy`、导出到剪贴板、右键粘贴） | 可用（需安装 Termux:API 的 `termux-clipboard-set` / `termux-clipboard-get`；未安装时复制自动回退到 OSC 52） |
 | 后台任务/审批通知 | 可用（安装 Termux:API 时自动走 `termux-notification`，未安装时回退到终端铃声） |
 | 语音和实时对话、剪贴板图片粘贴 | 不可用（音频依赖不支持 Android；图片粘贴上游在 Android 上关闭） |
@@ -50,7 +50,7 @@ codex update
 
 ## 使用前请知道
 
-- **没有沙箱隔离。** Android 没有可用的内核沙箱机制，`codex sandbox` 不可用。`workspace-write`、`network_access = false` 等沙箱设置对 shell 命令**不会被强制执行**，命令以当前 Termux 用户的权限运行；只有 `apply_patch` 会在进程内检查目标路径是否在可写范围内。审批提示属于应用层逻辑，未做改动，请据此评估风险，需要把关时使用 `approval_policy = "untrusted"`。
+- **没有文件系统沙箱（禁网已在内核层强制执行）。** Android 内核不支持 Landlock 和非特权 user namespace，因此 `codex sandbox` 与文件系统隔离不可用：`workspace-write`、`read-only` 等路径限制对 shell 命令**不会被强制执行**，命令以当前 Termux 用户的权限运行；只有 `apply_patch` 会在进程内检查目标路径是否在可写范围内。**网络限制则已通过 `seccomp-bpf`（补丁 0025）在内核层强制执行**：`network_access = false`（`read-only` / `workspace-write` 的默认值）下 shell 子进程无法创建 `AF_INET`/`AF_INET6` 等网络 socket（返回 `EPERM`），`AF_UNIX`/`AF_NETLINK` 保持可用；需要访问网络或本地 `127.0.0.1` 端口时开启 `network_access = true` 或 `danger-full-access`。审批提示属于应用层逻辑，未做改动，需要把关时使用 `approval_policy = "untrusted"`。
 - **共享后台服务会常驻**，约 270 MB 内存；被 Android 杀掉或被 `codex update` 重启时，已连上的界面会报错退出。不想用：`codex --no-daemon`，或在 `config.toml` 里设 `features.daemon_auto_start = false`。
 - **远程控制会把设备登记到你的 ChatGPT 账号**，只有主动开启并配对后才生效；配对后的客户端能在这台手机上执行命令。
 
