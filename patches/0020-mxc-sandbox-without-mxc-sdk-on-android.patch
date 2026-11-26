@@ -2,7 +2,7 @@ diff --git a/codex-rs/mxc-sandbox/Cargo.toml b/codex-rs/mxc-sandbox/Cargo.toml
 index 2cd39d5..f299896 100644
 --- a/codex-rs/mxc-sandbox/Cargo.toml
 +++ b/codex-rs/mxc-sandbox/Cargo.toml
-@@ -21,11 +21,15 @@ codex-protocol = { workspace = true }
+@@ -21,9 +21,13 @@ codex-protocol = { workspace = true }
  codex-utils-absolute-path = { workspace = true }
  codex-utils-path-uri = { workspace = true }
  codex-windows-sandbox = { workspace = true }
@@ -17,5 +17,3 @@ index 2cd39d5..f299896 100644
 +mxc-sdk = { workspace = true }
 +
  [target.'cfg(windows)'.dependencies]
- flatbuffers = { workspace = true }
- # 1.2.4 imports OneCore_apiset, which the GNU Windows toolchain does not ship.
