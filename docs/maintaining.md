@@ -9,6 +9,10 @@
 ```bash
 git clone --depth 1 --branch rust-v<新版本> https://github.com/openai/codex.git /tmp/x   # 手机上用 $TMPDIR
 cd x && for p in /path/to/codex-termux/patches/*.patch; do git apply --check "$p" && git apply "$p"; done
+if grep -Fxq '    launch: SandboxExecRequest,' codex-rs/core/src/sandboxing/mod.rs; then
+  p=/path/to/codex-termux/patches/compat/0025-android-network-policy-from-prepared-launch.patch
+  git apply --check "$p" && git apply "$p"
+fi
 grep '^v8 = ' codex-rs/Cargo.toml
 ```
 

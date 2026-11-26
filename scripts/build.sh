@@ -52,6 +52,10 @@ echo "::endgroup::"
 echo "::group::Apply patches"
 shopt -s nullglob
 PATCHES=("$ROOT"/patches/*.patch)
+# Codex 0.172.0 moved the permission profile into a prepared launch request.
+if grep -Fxq '    launch: SandboxExecRequest,' "$SRC/codex-rs/core/src/sandboxing/mod.rs"; then
+  PATCHES+=("$ROOT/patches/compat/0025-android-network-policy-from-prepared-launch.patch")
+fi
 for p in "${PATCHES[@]}"; do
   git -C "$SRC" apply --check "$p" || { echo "build: patch does not apply: $(basename "$p")" >&2; exit 1; }
   git -C "$SRC" apply "$p"
@@ -134,9 +138,9 @@ cp "$DIST/pkg/codex" "$DIST/pkg/codex-code-mode-host" "$DIST/"
 
 VERSION="$VERSION" TAG="$TAG" UPSTREAM_SHA="$UPSTREAM_SHA" RUSTC_VER="$RUSTC_VER" \
 V8_VERSION="$V8_VERSION" V8_TAG="$V8_TAG" V8_SHA256="$RUSTY_V8_ARCHIVE_SHA256" \
-ROOT="$ROOT" DIST="$DIST" python3 - <<'PY'
-import hashlib, json, os, pathlib, platform
-root, dist = pathlib.Path(os.environ["ROOT"]), pathlib.Path(os.environ["DIST"])
+DIST="$DIST" python3 - "${PATCHES[@]}" <<'PY'
+import hashlib, json, os, pathlib, platform, sys
+dist = pathlib.Path(os.environ["DIST"])
 sha = lambda p: hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 doc = {
     "codex": os.environ["VERSION"],
@@ -148,7 +152,7 @@ doc = {
     "code_mode_engine": f"V8 (rusty_v8 {os.environ['V8_VERSION']}, sandbox)",
     "rusty_v8": {"version": os.environ["V8_VERSION"], "release": os.environ["V8_TAG"],
                  "archive_sha256": os.environ["V8_SHA256"]},
-    "patches": {p.name: sha(p) for p in sorted((root / "patches").glob("*.patch"))},
+    "patches": {p.name: sha(p) for p in map(pathlib.Path, sys.argv[1:])},
     "binary_sha256": sha(dist / "codex"),
     "host_sha256": sha(dist / "codex-code-mode-host"),
     "tarball_sha256": sha(dist / "codex-termux-aarch64.tar.gz"),

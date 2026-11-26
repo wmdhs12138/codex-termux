@@ -1,0 +1,49 @@
+diff --git a/codex-rs/app-server/src/command_exec.rs b/codex-rs/app-server/src/command_exec.rs
+--- a/codex-rs/app-server/src/command_exec.rs
++++ b/codex-rs/app-server/src/command_exec.rs
+@@ -267,10 +267,7 @@
+             );
+         }
+         #[cfg(target_os = "android")]
+-        let restrict_network = !exec_request
+-            .permission_profile
+-            .network_sandbox_policy()
+-            .is_enabled();
++        let restrict_network = exec_request.as_ref().restrict_network();
+         #[cfg(target_os = "android")]
+         let spawned = if tty {
+             codex_utils_pty::pty::spawn_process_with_network_restriction(
+diff --git a/codex-rs/core/src/sandboxing/mod.rs b/codex-rs/core/src/sandboxing/mod.rs
+--- a/codex-rs/core/src/sandboxing/mod.rs
++++ b/codex-rs/core/src/sandboxing/mod.rs
+@@ -190,6 +190,15 @@
+
+     pub(crate) fn arg0(&self) -> &Option<String> {
+         &self.launch.arg0
++    }
++
++    #[cfg(target_os = "android")]
++    pub fn restrict_network(&self) -> bool {
++        !self
++            .launch
++            .permission_profile
++            .network_sandbox_policy()
++            .is_enabled()
+     }
+
+     pub(crate) fn sandbox_policy_cwd(&self) -> &PathUri {
+diff --git a/codex-rs/core/src/unified_exec/process_manager.rs b/codex-rs/core/src/unified_exec/process_manager.rs
+--- a/codex-rs/core/src/unified_exec/process_manager.rs
++++ b/codex-rs/core/src/unified_exec/process_manager.rs
+@@ -1464,10 +1464,7 @@
+             stdin_open: tty,
+             inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
+             #[cfg(target_os = "android")]
+-            restrict_network: !request
+-                .permission_profile
+-                .network_sandbox_policy()
+-                .is_enabled(),
++            restrict_network: request.restrict_network(),
+         })
+         .await;
+         let spawned =

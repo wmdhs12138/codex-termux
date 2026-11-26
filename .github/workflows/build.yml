@@ -158,7 +158,7 @@ jobs:
           shellcheck -x -S warning scripts/*.sh .github/ci/*.sh tests/*.sh install.sh
           jq -e . versions.json >/dev/null
           # Patches must be plain unified diffs with a/ b/ prefixes.
-          for p in patches/*.patch; do
+          for p in patches/*.patch patches/compat/*.patch; do
             grep -q '^diff --git a/' "$p" || { echo "::error::$p is not a git diff"; exit 1; }
           done
 
@@ -202,9 +202,9 @@ jobs:
             work/cargo-home/git/db
             work/cargo-home/git/checkouts
             work/target
-          key: codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'scripts/cargo-env.sh') }}-${{ github.run_id }}
+          key: codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'patches/compat/*.patch', 'scripts/cargo-env.sh') }}-${{ github.run_id }}
           restore-keys: |
-            codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'scripts/cargo-env.sh') }}-
+            codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'patches/compat/*.patch', 'scripts/cargo-env.sh') }}-
             codex-bionic-cargo-${{ needs.resolve.outputs.version }}-
             codex-bionic-cargo-
 
@@ -243,7 +243,7 @@ jobs:
             work/cargo-home/git/db
             work/cargo-home/git/checkouts
             work/target
-          key: codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'scripts/cargo-env.sh') }}-${{ github.run_id }}
+          key: codex-bionic-cargo-${{ needs.resolve.outputs.version }}-${{ hashFiles('patches/*.patch', 'patches/compat/*.patch', 'scripts/cargo-env.sh') }}-${{ github.run_id }}
 
       - name: Verify Bionic acceptance manifest
         env:
